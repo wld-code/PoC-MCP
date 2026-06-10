@@ -1,155 +1,198 @@
-# MCP PoC — LLM Agent → MCP Server → API → SQLite
+# MCP PoC — LLM Agent · MCP Server · FastAPI · SQLite
 
-A small but complete proof-of-concept showing how a **Model Context Protocol
-(MCP)** server lets an LLM agent answer questions over data that lives behind a
-real HTTP API.
+A complete, runnable proof-of-concept of the **Model Context Protocol (MCP)**: an
+LLM agent answers questions over data that lives behind a real HTTP API, by
+calling **MCP tools** instead of touching the backend directly.
+
+`Agent (LLM)` → `MCP server` → `FastAPI` → `SQLite` — each piece is its own
+container, fully Dockerized, with a Kubernetes path and end-to-end tests.
 
 ```
 ┌──────────┐   MCP (Streamable HTTP)   ┌──────────────┐   HTTP   ┌──────────┐   SQL   ┌────────┐
 │  Agent   │ ────────────────────────▶ │  MCP server  │ ───────▶ │  FastAPI │ ──────▶ │ SQLite │
-│ (LLM)    │ ◀──────────────────────── │  (FastMCP)   │ ◀─────── │   API    │ ◀────── │  .db   │
+│  (LLM)   │ ◀──────────────────────── │  (FastMCP)   │ ◀─────── │   API    │ ◀────── │  .db   │
 └──────────┘     tools / results       └──────────────┘   JSON   └──────────┘  rows   └────────┘
 ```
 
-- **`api/`** — FastAPI service serving random product & sales data from SQLite.
-- **`mcp_server/`** — MCP server (official Python SDK / FastMCP) that exposes the
-  API's endpoints as MCP **tools** over Streamable HTTP.
-- **`agent/`** — a provider-agnostic LLM agent (Claude by default; OpenAI or
-  Mistral via one env var) that connects to the MCP server, discovers its
-  tools, and uses them to answer your questions. It ships in **two forms**:
-  - **headless** (`headless.py`) — query in, answer out; for automation/CI/Jobs.
-  - **UI** (`web.py`) — a browser chat front-end.
-  - (plus `agent.py`, an interactive terminal REPL).
+## Why MCP
 
-Everything runs in Docker, with a Kubernetes tutorial for production.
+The agent never queries the API or the database. It only sees **tools** the MCP
+server advertises (self-describing: name + description + JSON schema). You can
+swap the backend, add authentication, or add tools **without changing the agent**.
+The MCP server is a thin adapter; the FastAPI service stays the single source of
+truth.
 
-## Why this shape?
+## Features
 
-The agent never talks to the API or database directly. It only knows about
-**tools** advertised by the MCP server. This is the whole point of MCP: the
-model gets a standard, self-describing tool interface, and you can swap the
-backend, add auth, or add new tools without touching the model code. The MCP
-server is a thin adapter — it forwards each tool call to the FastAPI backend,
-which remains the single source of truth.
+- **Provider-agnostic agent** — Claude (default), OpenAI, or Mistral via one env
+  var; a `mock` provider runs the full pipeline with **no API key and no cost**.
+- **Two agents** — `headless` (automation/CI/Jobs) and a modern **web chat UI**.
+- **Official MCP Python SDK (FastMCP)** over Streamable HTTP — production-friendly.
+- **Dockerized** end-to-end + **Kubernetes** manifests + step-by-step tutorials.
+- **End-to-end tests** that boot the real services and exercise every layer.
 
 ---
 
-## Quick start (Docker)
+## Quick start
 
-Prerequisites: Docker + Docker Compose, and an API key for your chosen LLM.
+**Requirements:** Docker + Docker Compose. An LLM API key is optional (use
+`LLM_PROVIDER=mock` to run for free).
 
 ```bash
-cp .env.example .env
-# edit .env: set LLM_PROVIDER and the matching API key (e.g. ANTHROPIC_API_KEY)
-
-# Build & start the API, MCP server, and the UI agent
-docker compose up -d --build
-
-# UI agent: open the browser chat
-open http://localhost:8002
-
-# Headless agent: one-shot question (uses the MCP server + API)
-docker compose run --rm agent python headless.py "What are the top 3 products by revenue?"
-
-# Interactive terminal REPL (bonus)
-docker compose run --rm agent python agent.py
+cp .env.example .env          # then edit .env (see Configuration below)
+docker compose up -d --build  # builds & starts api, mcp-server, agent-web
 ```
 
-> Tip: run everything with **no API key and no cost** by setting
-> `LLM_PROVIDER=mock` in `.env` — the agents still call the MCP tools and return
-> real data, just without an LLM phrasing the answer. This is what the tests use.
+Open the **web chat** → http://localhost:8002
 
-You can also hit the API directly to see the raw data:
+Run the **headless agent**:
 
 ```bash
-curl localhost:8000/sales/top?limit=3
+docker compose run --rm agent python headless.py "Top 3 products by revenue?"
+```
+
+Hit the **raw API** directly:
+
+```bash
 curl localhost:8000/sales/summary
-open http://localhost:8000/docs        # interactive OpenAPI docs
+open  http://localhost:8000/docs        # interactive OpenAPI docs
 ```
 
-## Quick start (no Docker)
+> **No key? No problem.** Set `LLM_PROVIDER=mock` in `.env` — the agents still
+> call the real MCP tools and return live data; only the natural-language
+> phrasing is skipped. This is exactly what the test suite uses.
 
-Three terminals, one virtualenv:
+> **Ports already in use?** The defaults are `8000/8001/8002`. Override the host
+> ports in `.env` with `API_PORT`, `MCP_PORT`, `WEB_PORT` (containers keep using
+> 8000/8001/8002 internally).
+
+---
+
+## Configuration
+
+`.env` (copied from `.env.example`):
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `LLM_PROVIDER` | `claude` · `openai` · `mistral` · `mock` | `claude` |
+| `LLM_MODEL` | Override the model id (optional) | provider default |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `MISTRAL_API_KEY` | Key for the chosen provider | — |
+| `API_PORT` / `MCP_PORT` / `WEB_PORT` | Host port overrides | `8000` / `8001` / `8002` |
+
+Provider defaults:
+
+| `LLM_PROVIDER` | Default model | Key |
+| --- | --- | --- |
+| `claude` | `claude-opus-4-8` | `ANTHROPIC_API_KEY` |
+| `openai` | `gpt-4o` | `OPENAI_API_KEY` |
+| `mistral` | `mistral-large-latest` | `MISTRAL_API_KEY` |
+| `mock` | — (no LLM) | none |
+
+The MCP tool layer is identical across providers; only the per-provider
+function-calling format differs (`agent/providers.py`).
+
+---
+
+## The two agents
+
+| Agent | File | For |
+| --- | --- | --- |
+| **Headless** | `agent/headless.py` | Automation, CI, cron, Kubernetes Jobs, pipelines. Query in → answer out → exit. `--json` emits the answer + the tool calls made. |
+| **Web UI** | `agent/web.py` | A browser chat: Markdown answers, MCP tool-call chips, clear error messages. Served at `/`; chat at `POST /api/chat`. |
+
+(Plus `agent/agent.py`, an interactive terminal REPL.)
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r api/requirements.txt -r mcp_server/requirements.txt -r agent/requirements.txt
+# Headless — one-shot
+docker compose run --rm agent python headless.py --json "Products under $50"
 
-# 1) API  (auto-seeds SQLite on first run)
-cd api && DB_PATH=/tmp/poc.db uvicorn main:app --port 8000
-
-# 2) MCP server
-cd mcp_server && API_BASE_URL=http://localhost:8000 python server.py
-
-# 3) An agent (pick one) — set ANTHROPIC_API_KEY, or LLM_PROVIDER=mock for no key
-cd agent && export MCP_SERVER_URL=http://localhost:8001/mcp
-python headless.py "Which products cost more than 400?"   # headless
-uvicorn web:app --port 8002                                # UI → http://localhost:8002
+# Web UI — already running from `docker compose up`
+open http://localhost:8002
 ```
 
 ---
-
-## Choosing the LLM provider
-
-The agent is provider-agnostic. Pick one with `LLM_PROVIDER` and supply the
-matching key:
-
-| `LLM_PROVIDER` | Default model           | Key env var         |
-| -------------- | ----------------------- | ------------------- |
-| `claude` (def) | `claude-opus-4-8`       | `ANTHROPIC_API_KEY` |
-| `openai`       | `gpt-4o`                | `OPENAI_API_KEY`    |
-| `mistral`      | `mistral-large-latest`  | `MISTRAL_API_KEY`   |
-
-Override the model with `LLM_MODEL`. The MCP tool layer is identical across
-providers — only the per-provider function-calling format differs, and that's
-handled in `agent/providers.py`.
-
----
-
-## Documentation
-
-| Doc | What's in it |
-| --- | --- |
-| [`docs/01-mcp-tutorial.md`](docs/01-mcp-tutorial.md) | How the MCP server works, tool design, transports, and how the agent bridges MCP tools to each LLM |
-| [`docs/02-docker.md`](docs/02-docker.md) | Building images, Docker Compose, running in "prod", hardening notes |
-| [`docs/03-kubernetes.md`](docs/03-kubernetes.md) | Deploying the whole stack to Kubernetes step by step |
-| [`docs/04-agents-and-tests.md`](docs/04-agents-and-tests.md) | The headless & UI agents, the `mock` provider, and the e2e tests |
 
 ## Testing
 
-End-to-end tests boot the real API + MCP server and drive every layer
-(API → MCP → headless agent → UI agent), using the `mock` provider so they need
-**no API key and cost nothing**:
+End-to-end tests boot the **real** API + MCP server and drive every layer
+(API → MCP → headless agent → web agent) using the `mock` provider — **no key,
+no cost, deterministic**.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r api/requirements.txt -r mcp_server/requirements.txt \
             -r agent/requirements.txt -r tests/requirements.txt
 pytest -v
-# → 5 passed, 1 skipped   (the skipped one is a real-LLM test; set a key to run it)
+# → 5 passed, 1 skipped   (the skip is the optional live-LLM test; set a key to run it)
 ```
 
-See [`docs/04-agents-and-tests.md`](docs/04-agents-and-tests.md) for what each
-test proves and how to run the live-LLM test.
+---
 
-## Repository layout
+## Run without Docker
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r api/requirements.txt -r mcp_server/requirements.txt -r agent/requirements.txt
+
+# terminal 1 — API (auto-seeds SQLite)
+cd api && DB_PATH=/tmp/poc.db uvicorn main:app --port 8000
+# terminal 2 — MCP server
+cd mcp_server && API_BASE_URL=http://localhost:8000 python server.py
+# terminal 3 — an agent (set a key, or LLM_PROVIDER=mock)
+cd agent && export MCP_SERVER_URL=http://localhost:8001/mcp
+python headless.py "Which products cost more than 400?"   # headless
+uvicorn web:app --port 8002                                # UI → :8002
+```
+
+---
+
+## Project structure
 
 ```
 .
-├── api/             FastAPI + SQLite data service
-├── mcp_server/      MCP server (FastMCP) wrapping the API
-├── agent/           Provider-agnostic agent core + headless.py + web.py + agent.py
-├── tests/           End-to-end test suite (pytest)
-├── k8s/             Kubernetes manifests
-├── docs/            Tutorials
+├── api/            FastAPI + SQLite data service
+├── mcp_server/     MCP server (FastMCP) wrapping the API as tools
+├── agent/          Provider-agnostic core + headless.py · web.py · agent.py
+├── tests/          End-to-end test suite (pytest)
+├── k8s/            Kubernetes manifests (Deployments, Services, PVC, Job, Secret)
+├── docs/           Tutorials
 ├── docker-compose.yml
 └── .env.example
 ```
 
-## Verified
+## Documentation
 
-Run end-to-end on this machine: the data path (Agent → MCP client → MCP server →
-FastAPI → SQLite) returns live seeded data, and the **headless** and **UI**
-agents both complete the full tool loop. `pytest` reports **5 passed, 1
-skipped** (the skip is the optional real-LLM test). The LLM loop follows each
-provider's documented tool-use pattern.
+| Doc | Contents |
+| --- | --- |
+| [`docs/01-mcp-tutorial.md`](docs/01-mcp-tutorial.md) | MCP concepts, tool design, transports, LLM bridging |
+| [`docs/02-docker.md`](docs/02-docker.md) | Images, Compose, prod hardening |
+| [`docs/03-kubernetes.md`](docs/03-kubernetes.md) | Deploy the stack to Kubernetes, step by step |
+| [`docs/04-agents-and-tests.md`](docs/04-agents-and-tests.md) | The two agents, the `mock` provider, the e2e tests |
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause / Fix |
+| --- | --- |
+| Web chat shows **"Insufficient API credits"** | The LLM account has no credits. Add credits, or set `LLM_PROVIDER=mock` and `docker compose up -d`. |
+| Web chat shows **"Invalid or missing API key"** | Key wrong or not matching `LLM_PROVIDER`; fix `.env`, then `docker compose up -d`. |
+| `bind: address already in use` | Ports `8000`/`8002` taken. Set `API_PORT` / `WEB_PORT` in `.env`. |
+| Want to watch tool calls live | `docker compose logs -f agent-web` |
+
+## Common commands
+
+```bash
+docker compose ps                  # status
+docker compose logs -f agent-web   # follow the UI agent
+docker compose up -d --build       # rebuild after a change
+docker compose down                # stop (keep data);  add -v to wipe the DB volume
+```
+
+## Notes
+
+- Secrets live only in `.env` (git-ignored) / Kubernetes Secrets — never in images.
+- SQLite is single-writer (fine for a PoC); swap for Postgres for real load — the
+  MCP server and agents don't change.
+- Verified end-to-end on this machine: full data path returns live data, both
+  agents complete the tool loop, `pytest` → **5 passed, 1 skipped**.
