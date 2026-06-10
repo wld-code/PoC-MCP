@@ -1,5 +1,9 @@
 # MCP PoC — LLM Agent · MCP Server · FastAPI · SQLite
 
+[![CI](https://github.com/wld-code/PoC-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/wld-code/PoC-MCP/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
+
 A complete, runnable proof-of-concept of the **Model Context Protocol (MCP)**: an
 LLM agent answers questions over data that lives behind a real HTTP API, by
 calling **MCP tools** instead of touching the backend directly.
@@ -168,6 +172,7 @@ uvicorn web:app --port 8002                                # UI → :8002
 | [`docs/02-docker.md`](docs/02-docker.md) | Images, Compose, prod hardening |
 | [`docs/03-kubernetes.md`](docs/03-kubernetes.md) | Deploy the stack to Kubernetes, step by step |
 | [`docs/04-agents-and-tests.md`](docs/04-agents-and-tests.md) | The two agents, the `mock` provider, the e2e tests |
+| [`docs/05-agent-architecture.md`](docs/05-agent-architecture.md) | What an agent is, the agentic loop, how to build one, the agents in this repo |
 
 ---
 
@@ -196,3 +201,7 @@ docker compose down                # stop (keep data);  add -v to wipe the DB vo
   MCP server and agents don't change.
 - Verified end-to-end on this machine: full data path returns live data, both
   agents complete the tool loop, `pytest` → **5 passed, 1 skipped**.
+
+## License
+
+[MIT](LICENSE) © Walid Abdaoui
