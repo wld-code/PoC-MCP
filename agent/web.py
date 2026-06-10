@@ -53,6 +53,47 @@ class ChatIn(BaseModel):
     message: str
 
 
+def explain_llm_error(provider: str, exc: Exception) -> str:
+    """Turn a raw provider exception into a clear, explicit explanation."""
+    msg = str(exc)
+    low = msg.lower()
+
+    if "credit balance is too low" in low or "billing" in low or "insufficient_quota" in low:
+        title = "Insufficient API credits"
+        detail = (
+            f"The **{provider.title()}** account for this API key has run out of credits, "
+            "so the language model cannot be called.\n\n"
+            "**Fix it by either:**\n"
+            "- Adding credits in the provider's billing console (for Claude: "
+            "Anthropic Console → *Plans & Billing*), then send your message again; or\n"
+            "- Running the demo with **no LLM**: set `LLM_PROVIDER=mock` in `.env` and "
+            "`docker compose up -d` — the agent still calls the real MCP tools and returns "
+            "live data, only the wording is generated without an LLM."
+        )
+    elif "authentication" in low or " 401" in low or "invalid x-api-key" in low or "invalid api key" in low:
+        title = "Invalid or missing API key"
+        detail = (
+            f"The **{provider.title()}** API key was rejected. Check that the key in `.env` "
+            "is correct and matches `LLM_PROVIDER`, then recreate the container "
+            "(`docker compose up -d`)."
+        )
+    elif "rate limit" in low or " 429" in low or "overloaded" in low:
+        title = "Rate limited / overloaded"
+        detail = "Too many requests to the provider right now. Wait a few seconds and retry."
+    else:
+        title = "The language model request failed"
+        detail = (
+            "The MCP tools and the data API are fine — the failure is in the LLM call. "
+            "See the technical details below."
+        )
+
+    return (
+        f"⚠️ **{title}**\n\n{detail}\n\n"
+        f"**Provider:** `{provider}`\n\n"
+        f"**Raw error:**\n\n```\n{msg}\n```"
+    )
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -88,9 +129,14 @@ async def chat(body: ChatIn, request: Request) -> dict:
             tool_calls.append({"name": name, "arguments": args})
             return await state.mcp.call_tool(name, args)
 
-        answer = await provider.send(body.message, state.tools, call_tool)
+        error = False
+        try:
+            answer = await provider.send(body.message, state.tools, call_tool)
+        except Exception as exc:  # noqa: BLE001 — surface provider errors to the UI
+            answer = explain_llm_error(state.provider_name, exc)
+            error = True
 
-    return {"answer": answer, "tool_calls": tool_calls}
+    return {"answer": answer, "tool_calls": tool_calls, "error": error}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -160,6 +206,9 @@ INDEX_HTML = """<!doctype html>
   .bubble { padding:12px 15px; border-radius:16px; font-size:14.5px; }
   .me .bubble { background:linear-gradient(135deg,var(--user1),var(--user2)); color:#fff; border-bottom-right-radius:5px; }
   .bot .bubble { background:var(--bot); color:var(--ink); border:1px solid var(--line); border-bottom-left-radius:5px; }
+  .bot .bubble.err { background:#fff4f4; border:1px solid #f3c9c9; color:#7d1d1d; }
+  .bot .bubble.err code { background:#fbe2e2; }
+  .bot .bubble.err pre { background:#3a1414; color:#ffd9d9; }
 
   /* markdown inside assistant bubbles */
   .bubble p { margin:0 0 8px; } .bubble p:last-child { margin-bottom:0; }
@@ -302,6 +351,7 @@ INDEX_HTML = """<!doctype html>
       });
       const data = await res.json();
       b.innerHTML = marked.parse(data.answer || "*(no answer)*");
+      if (data.error) b.classList.add("err");
       addTools(data.tool_calls);
     } catch (err) {
       b.innerHTML = "⚠️ Error: " + err;
