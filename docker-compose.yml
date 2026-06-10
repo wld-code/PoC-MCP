@@ -1,0 +1,64 @@
+services:
+  api:
+    build: ./api
+    environment:
+      DB_PATH: /data/data.db
+      AUTO_SEED: "1"
+    volumes:
+      - api-data:/data
+    ports:
+      - "${API_PORT:-8000}:8000"   # host port overridable via .env (API_PORT)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  mcp-server:
+    build: ./mcp_server
+    environment:
+      API_BASE_URL: http://api:8000
+    ports:
+      - "${MCP_PORT:-8001}:8001"   # host port overridable via .env (MCP_PORT)
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # HEADLESS agent — one-shot/interactive, so it does NOT auto-start.
+  # Run a one-shot query:
+  #   docker compose run --rm agent python headless.py "Top 3 products by revenue?"
+  # Or the interactive CLI:
+  #   docker compose run --rm agent python agent.py
+  agent:
+    build: ./agent
+    environment:
+      MCP_SERVER_URL: http://mcp-server:8001/mcp
+      LLM_PROVIDER: ${LLM_PROVIDER:-claude}
+      LLM_MODEL: ${LLM_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+    depends_on:
+      - mcp-server
+    profiles: ["manual"]     # don't start with `up`; run on demand
+    stdin_open: true
+    tty: true
+
+  # UI agent — web chat. Starts with `up`; open http://localhost:8002
+  agent-web:
+    build: ./agent
+    command: ["uvicorn", "web:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      MCP_SERVER_URL: http://mcp-server:8001/mcp
+      LLM_PROVIDER: ${LLM_PROVIDER:-claude}
+      LLM_MODEL: ${LLM_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+    ports:
+      - "${WEB_PORT:-8002}:8002"   # host port overridable via .env (WEB_PORT)
+    depends_on:
+      - mcp-server
+
+volumes:
+  api-data:

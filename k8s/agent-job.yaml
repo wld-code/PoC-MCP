@@ -1,0 +1,25 @@
+# One-shot agent run as a Kubernetes Job. The API key comes from a Secret
+# (see secret.example.yaml). Edit `args` to ask a different question.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-query
+  namespace: mcp-poc
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: agent
+          image: mcp-poc/agent:latest
+          imagePullPolicy: IfNotPresent
+          args: ["python", "agent.py", "What are the top 3 products by revenue?"]
+          env:
+            - name: MCP_SERVER_URL
+              value: http://mcp-server:8001/mcp
+            - name: LLM_PROVIDER
+              value: claude
+          envFrom:
+            - secretRef:
+                name: llm-secrets

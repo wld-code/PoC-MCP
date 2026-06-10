@@ -1,0 +1,42 @@
+# MCP server: stateless adapter, safe to scale horizontally.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server
+  namespace: mcp-poc
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mcp-server
+  template:
+    metadata:
+      labels:
+        app: mcp-server
+    spec:
+      containers:
+        - name: mcp-server
+          image: mcp-poc/mcp-server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8001
+          env:
+            - name: API_BASE_URL
+              value: http://api:8000
+          readinessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-server
+  namespace: mcp-poc
+spec:
+  selector:
+    app: mcp-server
+  ports:
+    - port: 8001
+      targetPort: 8001
