@@ -1,4 +1,4 @@
-# MCP PoC — Agentic AI over three APIs · Connected-Vehicle scenario
+# MCP PoC — Agentic AI over four APIs · Connected-Vehicle scenario
 
 [![CI](https://github.com/wld-code/PoC-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/wld-code/PoC-MCP/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -6,12 +6,12 @@
 
 A complete, runnable **tutorial** for the **Model Context Protocol (MCP)** and
 **agentic AI**. An LLM agent reads live vehicle data and orchestrates service
-activations by calling **MCP tools** across **two backends** — never touching
+activations by calling **MCP tools** across **four backends** — never touching
 the APIs or databases directly.
 
 > 📚 **Start here:** [`docs/06-agentic-ai-tutorial.md`](docs/06-agentic-ai-tutorial.md)
 > — a step-by-step walkthrough of what an agent is, what makes it *agentic*, and
-> how it uses the three MCP servers below.
+> how it uses the four MCP servers below.
 
 ## The scenario
 
@@ -67,7 +67,7 @@ single source of truth.
 - **Control-plane / data-plane split** — ASAP tracks the **desired** state and
   reconciles it to the **actual** state by dispatching campaigns to Redbend; a
   failed campaign shows up as a **drift** the agent can detect and explain.
-- **Multi-MCP agent** — connects to **all three** servers and routes each tool
+- **Multi-MCP agent** — connects to **all four** servers and routes each tool
   call to its owner (`agent/mcp_client.py`); the web app uses a
   `DynamicMCPManager` so servers can be added/removed at runtime.
 - **Provider-agnostic** — Claude (default), OpenAI, OpenRouter, or Mistral via one
@@ -76,8 +76,8 @@ single source of truth.
 - **Live CRUD in the UI** — manage **MCP servers** and **LLM configs** from the
   browser (add/edit/remove), no restart.
 - **Three agent entry points** — `headless.py` (automation/CI/Jobs), `web.py`
-  (4-tab browser app), `agent.py` (interactive REPL).
-- **End-to-end tests** that boot all four real services and drive every layer.
+  (executive web app, see below), `agent.py` (interactive REPL).
+- **End-to-end tests** that boot all eight real services and drive every layer.
 
 ---
 
@@ -87,7 +87,7 @@ single source of truth.
 
 ```bash
 cp .env.example .env             # then edit .env if you have an LLM key
-docker compose up -d --build     # asap-api, cvc-api, asap-mcp, cvc-mcp, agent-web
+docker compose up -d --build     # 4 APIs + 4 MCP servers + agent-web
 ```
 
 Open the **web chat** → http://localhost:8002 and try:
@@ -149,36 +149,48 @@ one `OPENROUTER_API_KEY` unlocks hundreds of models behind the same agent loop.
 | Agent | File | For |
 | --- | --- | --- |
 | **Headless** | `agent/headless.py` | Automation, CI, cron, K8s Jobs, pipelines. Query in → answer out → exit. `--json` emits the answer + the tool calls made. |
-| **Web UI** | `agent/web.py` | A 4-tab browser app with MCP/LLM CRUD (see below). Served at `/`. |
+| **Web UI** | `agent/web.py` | "AI Operations Control" — a 7-view executive web app (see below). Served at `/`. |
 | **REPL** | `agent/agent.py` | Interactive terminal session. |
 
 All three share the same core: `MultiMCPClient` (both servers) + the
 provider-agnostic LLM loop in `providers.py`.
 
-### The web app (4 tabs)
+### The web app — "AI Operations Control"
 
-- **💬 Chat** — the interactive agent. A header dropdown picks the active **LLM**
-  and an input overrides the **model** live.
-- **🧩 MCP Servers** — **CRUD** the connected MCP servers: add one by URL at
-  runtime (its tools join the merged toolbox immediately), edit its URL, or
-  remove it. Each server is a card showing its status and the tools it
-  contributes; unreachable URLs fail fast with a clear error.
-- **🧠 LLMs** — **CRUD** the LLM configurations the agent can use: name, **kind**
-  (`mock`, `openai-compatible`, `openai`, `anthropic`, `mistral`), API key, base
-  URL and model. Create as many as you like (e.g. several OpenRouter models),
-  set a default, edit or delete them.
-- **⚙️ Headless** — configure and fire the headless agent: **run once**, click a
-  **preset task**, or create a **scheduled trigger** that re-runs a task on a
-  timer (fires immediately, then every N seconds) — with live run history.
+A premium, executive-style single-page app (no internal MCP terminology surfaced
+to the user) with a sidebar of seven views:
 
-Backend endpoints: `GET /api/info`, `GET /api/tools`, `POST /api/chat`,
-`GET|POST|PUT|DELETE /api/mcp/servers[/{id}]` (MCP CRUD),
-`GET|POST|PUT|DELETE /api/llms[/{id}]` + `PUT /api/llms/{id}/default` (LLM CRUD),
+- **Mission Control** — the interactive agent. Ask a question; get an *Executive
+  Answer* plus an **Evidence** panel listing the tools the agent used. A header
+  selector switches the active LLM live.
+- **Automations** — a catalog of **predefined AI agents** (Bootstrap
+  Investigator, Pairing Investigator, Service Activation Analyzer, FOTA Operator,
+  Fleet Anomaly Scout, Usage Analyst, Custom). Configure one with arguments, then
+  **Run now** or **Schedule** it like a recurring job (5 min / 15 min / hourly /
+  daily / custom).
+- **Deep Dive** — understand each **core process flow** end to end (Bootstrap,
+  Pairing, Service Activation, FOTA/SOTA, Fleet Analytics): the ordered steps,
+  which system/tool each uses and *why* — then **run the flow for a VIN** and see
+  each tool's real result step by step.
+- **Insights** — **business insights** auto-derived from the data lake: usage
+  KPIs, top applications with growth trends, flagged risks/anomalies, detected
+  patterns (fastest-growing, declining, top risk), and a one-click LLM-generated
+  executive brief.
+- **Data Sources** — **CRUD** the connected tool servers (add/edit/remove at
+  runtime; tools join the agent's toolbox instantly).
+- **AI Models** — **CRUD** the LLM configurations (kind, key, endpoint, model;
+  set a default).
+- **Audit Trail** — a log of every investigation and automated run.
+
+Backend endpoints: `GET /api/info`, `GET /api/tools`, `POST /api/tool` (run one
+tool — used by Deep Dive), `POST /api/chat`,
+`GET|POST|PUT|DELETE /api/mcp/servers[/{id}]` (data-source CRUD),
+`GET|POST|PUT|DELETE /api/llms[/{id}]` + `PUT /api/llms/{id}/default` (model CRUD),
 `POST /api/headless/run`, `GET /api/headless/runs`,
 `POST|GET|DELETE /api/headless/triggers`.
 
-> MCP and LLM edits are **in-memory** (re-seeded from `MCP_SERVER_URLS` and the
-> env keys at startup), which suits the PoC; persist them to a store for real use.
+> Data-source and model edits are **in-memory** (re-seeded from `MCP_SERVER_URLS`
+> and the env keys at startup), which suits the PoC; persist them for real use.
 
 ---
 

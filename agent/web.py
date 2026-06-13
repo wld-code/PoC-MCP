@@ -134,6 +134,11 @@ class TriggerIn(BaseModel):
     model: str | None = None
 
 
+class ToolIn(BaseModel):
+    name: str
+    arguments: dict = {}
+
+
 class McpIn(BaseModel):
     url: str
     id: str | None = None
@@ -255,6 +260,23 @@ async def health() -> dict[str, str]:
 @app.get("/api/tools")
 async def tools(request: Request) -> dict:
     return {"tools": [t["name"] for t in await request.app.state.mcp.list_tools()]}
+
+
+@app.post("/api/tool")
+async def call_tool(body: ToolIn, request: Request) -> dict:
+    """Run a single tool directly (used by the Deep Dive guided flows).
+
+    Routes to the owning MCP server via the manager and returns the raw result —
+    no LLM involved, so a flow can call tools step by step, deterministically.
+    """
+    state = request.app.state
+    async with state.lock:
+        try:
+            result = await state.mcp.call_tool(body.name, body.arguments or {})
+            ok = not str(result).startswith("(error")
+        except Exception as exc:  # noqa: BLE001
+            result, ok = str(exc), False
+    return {"name": body.name, "arguments": body.arguments or {}, "result": result, "ok": ok}
 
 
 @app.get("/api/info")
@@ -712,6 +734,50 @@ INDEX_HTML = r"""<!doctype html>
   .agentcard .cat{font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--faint);}
   .agentcard .ds{font-size:12px; color:var(--muted); margin-top:9px;}
 
+  /* deep dive flows */
+  .flowtabs{display:flex; flex-wrap:wrap; gap:8px;}
+  .flowtab{border:1px solid var(--border); background:var(--surface-2); color:var(--text); cursor:pointer; padding:8px 14px; border-radius:11px; font-size:12.5px; font-weight:600; display:flex; align-items:center; gap:8px;}
+  .flowtab:hover{border-color:var(--accent); color:var(--accent-dark);}
+  .flowtab.sel{border-color:var(--accent); background:var(--accent-soft); color:var(--accent-dark);}
+  .flowtab svg{width:15px; height:15px;}
+  .sysbadge{font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:999px; letter-spacing:.02em;}
+  .sys-cvc{background:#e8f3ff; color:#1d4ed8;} .sys-asap{background:#eafaf2; color:#15803d;}
+  .sys-redbend{background:#fff3e6; color:#b45309;} .sys-datalake{background:#f1ecfd; color:#6d28d9;}
+  .step{border:1px solid var(--border); border-radius:16px; padding:0; margin-bottom:12px; background:var(--surface); overflow:hidden;}
+  .step .sh{display:flex; align-items:center; gap:10px; padding:13px 15px; border-bottom:1px solid var(--border-2);}
+  .step .num{width:24px; height:24px; flex:0 0 24px; border-radius:50%; display:grid; place-items:center; font-size:12px; font-weight:700; background:var(--accent-soft); color:var(--accent-dark);}
+  .step .tool{font-family:ui-monospace,Menlo,monospace; font-size:12.5px; font-weight:600;}
+  .step .st{margin-left:auto; font-size:11px; font-weight:600; display:flex; align-items:center; gap:6px; color:var(--faint);}
+  .step .body{padding:12px 15px;}
+  .step .what{font-size:13px; font-weight:560;}
+  .step .why{font-size:12px; color:var(--muted); margin-top:3px;}
+  .step .args{font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted); margin-top:9px;}
+  .step .res{margin-top:10px; background:#0f172a; color:#e2e8f0; border-radius:10px; padding:11px 12px; font-family:ui-monospace,Menlo,monospace; font-size:11px; max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-word;}
+  .step.pending{opacity:.85;} .step.skip .num{background:#eef0f4; color:var(--faint);}
+  .flowconn{height:14px; width:2px; background:var(--border); margin:-6px 0 -6px 27px;}
+
+  /* insights */
+  .insgrid{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  .insight{display:flex; gap:11px; padding:11px 0; border-bottom:1px dashed var(--border-2);}
+  .insight:last-child{border-bottom:0;}
+  .insight .ig{width:30px; height:30px; flex:0 0 30px; border-radius:9px; display:grid; place-items:center;}
+  .insight .it{font-size:13px; font-weight:560;} .insight .id{font-size:12px; color:var(--muted); margin-top:2px;}
+  .ig.up{background:#eafaf2; color:var(--success);} .ig.down{background:#fdecec; color:var(--danger);}
+  .ig.warn{background:#fdf6e7; color:#b45309;} .ig.info{background:var(--accent-soft); color:var(--accent-dark);}
+  .approw{display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px dashed var(--border-2);}
+  .approw:last-child{border-bottom:0;}
+  .approw .an{font-weight:560; font-size:13px;} .approw .ac{font-size:11px; color:var(--faint);}
+  .approw .av{margin-left:auto; text-align:right;}
+  .approw .as{font-weight:650; font-size:13px;} .approw .at{font-size:11.5px; font-weight:600;}
+  .at.up{color:var(--success);} .at.down{color:var(--danger);}
+  .anom{border:1px solid var(--border); border-radius:14px; padding:13px; margin-bottom:10px;}
+  .anom .top{display:flex; align-items:center; gap:9px;}
+  .anom .sev{font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; padding:2px 9px; border-radius:999px;}
+  .sev.high{background:#fdecec; color:var(--danger);} .sev.medium{background:#fdf6e7; color:#b45309;} .sev.low{background:#eef2f7; color:var(--muted);}
+  .anom .ttl{font-weight:600; font-size:13px;} .anom .det{font-size:12.5px; color:var(--muted); margin-top:7px;}
+  .anom .imp{margin-left:auto; font-size:11.5px; color:var(--faint);}
+  @media (max-width:900px){ .insgrid{grid-template-columns:1fr;} }
+
   @media (max-width:1100px){
     .app{grid-template-columns:1fr;}
     .sidebar{display:none;}
@@ -738,6 +804,14 @@ INDEX_HTML = r"""<!doctype html>
       <button class="nav-item" data-view="automations">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 00-.1-1l2-1.5-2-3.5-2.3 1a7 7 0 00-1.7-1l-.4-2.5h-4l-.4 2.5a7 7 0 00-1.7 1l-2.3-1-2 3.5 2 1.5a7 7 0 000 2l-2 1.5 2 3.5 2.3-1a7 7 0 001.7 1l.4 2.5h4l.4-2.5a7 7 0 001.7-1l2.3 1 2-3.5-2-1.5c.1-.3.1-.7.1-1z"/></svg>
         Automations
+      </button>
+      <button class="nav-item" data-view="deepdive">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+        Deep Dive
+      </button>
+      <button class="nav-item" data-view="insights">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 00-3.7 10.7c.4.4.7.9.7 1.5V16h6v-.8c0-.6.3-1.1.7-1.5A6 6 0 0012 3z"/></svg>
+        Insights
       </button>
       <div class="nav-label">Configure</div>
       <button class="nav-item" data-view="sources">
@@ -838,6 +912,39 @@ INDEX_HTML = r"""<!doctype html>
               <div id="trigList" style="margin-top:14px"></div>
             </div>
           </div>
+        </section>
+
+        <!-- ===== DEEP DIVE (process flows) ===== -->
+        <section class="view" id="view-deepdive">
+          <div class="panel" style="padding:18px; margin-bottom:16px">
+            <div class="sec-title">Core process flows</div>
+            <div class="sec-hint">Understand how each connected-vehicle process works end to end — which systems and tools are involved, in what order, and why. Pick a process, enter a vehicle, and run the flow to see real results step by step.</div>
+            <div class="flowtabs" id="flowTabs" style="margin-top:14px"></div>
+            <div class="rowflex" id="flowInputs" style="margin-top:14px"></div>
+            <div class="rowflex" style="margin-top:12px; align-items:center">
+              <button class="btn-primary" id="flowRun">Run flow</button>
+              <button class="btn" id="flowReset">Reset</button>
+              <span class="sec-hint" id="flowSummary" style="margin:0"></span>
+            </div>
+          </div>
+          <div id="flowSteps"></div>
+        </section>
+
+        <!-- ===== INSIGHTS (business analytics) ===== -->
+        <section class="view" id="view-insights">
+          <div class="rowflex" style="margin-bottom:16px; align-items:center">
+            <div style="flex:1"><div class="sec-title">Business insights</div>
+              <div class="sec-hint" style="margin:0">Patterns and signals derived from the connected-services data lake — adoption, growth, and risks worth a decision.</div></div>
+            <button class="btn" id="insightsRefresh">Refresh</button>
+            <button class="btn-primary" id="insightsGenerate">Generate executive insight</button>
+          </div>
+          <div class="kpis" id="insKpis" style="margin-bottom:16px"></div>
+          <div class="insgrid">
+            <div class="panel" style="padding:18px"><div class="sec-title">Patterns &amp; signals</div><div class="sec-hint">Auto-detected from the data.</div><div id="insPatterns" style="margin-top:8px"></div></div>
+            <div class="panel" style="padding:18px"><div class="sec-title">Top applications</div><div class="sec-hint">By usage, with growth trend.</div><div id="insApps" style="margin-top:10px"></div></div>
+          </div>
+          <div class="panel" style="padding:18px; margin-top:16px"><div class="sec-title">Risks &amp; anomalies</div><div class="sec-hint">Flagged across the fleet — each can trace back to a per-vehicle issue.</div><div id="insAnoms" style="margin-top:10px"></div></div>
+          <div id="insReport" style="margin-top:16px"></div>
         </section>
 
         <!-- ===== DATA SOURCES (mcp) ===== -->
@@ -997,7 +1104,9 @@ INDEX_HTML = r"""<!doctype html>
 
   const VIEWS = {
     mission:     ["Mission Control",  "Ask the AI agent to investigate operational data and explain what matters.", true],
-    automations: ["Automations",      "Run tasks on demand or on a schedule.",                                     false],
+    automations: ["Automations",      "Predefined AI agents you can run on demand or schedule.",                    false],
+    deepdive:    ["Deep Dive",        "Understand each core process flow end to end — and run the tools for a VIN.", false],
+    insights:    ["Insights",         "Business insights and patterns from the connected-services data lake.",       false],
     sources:     ["Data Sources",     "Connect the tools and APIs your AI agent can use.",                          false],
     models:      ["AI Models",        "Configure the AI models available to your agent.",                           false],
     audit:       ["Audit Trail",      "A log of every investigation and automated run.",                            false],
@@ -1018,6 +1127,8 @@ INDEX_HTML = r"""<!doctype html>
     if (key==="sources") loadSources();
     if (key==="models") loadModels();
     if (key==="automations") loadAutomations();
+    if (key==="deepdive") loadDeepDive();
+    if (key==="insights") loadInsights();
     if (key==="audit") loadAudit();
   }
   document.querySelectorAll(".nav-item").forEach(n => n.addEventListener("click", () => showView(n.dataset.view)));
@@ -1268,6 +1379,261 @@ INDEX_HTML = r"""<!doctype html>
   }
   window.stopTrigger = async (id) => { try{ await api("DELETE","/api/headless/triggers/"+id); }catch(e){} refreshTriggers(); };
   function loadAutomations(){ buildAgentGrid(); refreshTriggers(); }
+
+  // ---------- deep dive: core process flows ----------
+  // Each step calls a real tool via /api/tool. argsFn(ctx) builds the arguments
+  // from inputs + values resolved by earlier steps; after(ctx,res) extracts
+  // values (vin, campaign id, …) for later steps. Return null from argsFn to skip.
+  const SYS = { CVC:"sys-cvc", ASAP:"sys-asap", Redbend:"sys-redbend", "Data Lake":"sys-datalake" };
+  function firstVinFor(res, query){
+    // res is concatenated JSON objects from list_vehicles. Match owner/model/vin loosely.
+    const objs = res.split(/\}\s*\{/).map((s,i,a)=> (i? "{":"")+s+(i<a.length-1?"}":""));
+    const q = (query||"").toLowerCase();
+    for (const o of objs){
+      const vin = (o.match(/"vin"\s*:\s*"([^"]+)"/)||[])[1];
+      if (!vin) continue;
+      if (!q) return vin;
+      if (o.toLowerCase().includes(q)) return vin;
+    }
+    const m = res.match(/"vin"\s*:\s*"([^"]+)"/); return m? m[1] : null;
+  }
+  const grabCampaign = res => (res.match(/"(?:redbend_campaign_id|last_campaign_id|campaign_id)"\s*:\s*"([^"]+)"/)||[])[1] || null;
+
+  const FLOWS = [
+    { id:"bootstrap", name:"Bootstrap", icon:IC.plug,
+      desc:"How a connected vehicle comes online and gets its base services provisioned. We confirm it is a known vehicle, check it is reachable, see which services are provisioned, and check its embedded software stack.",
+      inputs:[{key:"vehicle", label:"Vehicle (VIN or owner)", placeholder:"Walid or VR7CONNECT00001", required:true}],
+      steps:[
+        { sys:"CVC", tool:"list_vehicles", what:"Resolve the vehicle and confirm it exists",
+          why:"Every flow starts from a VIN. The gateway is the registry of connected vehicles.",
+          argsFn:()=>({}), after:(ctx,res,inp)=>{ ctx.vin = firstVinFor(res, inp.vehicle); } },
+        { sys:"CVC", tool:"get_vehicle", what:"Check the car is online and reachable",
+          why:"Bootstrap needs live connectivity — energy, signal, software version, online status.",
+          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
+        { sys:"ASAP", tool:"service_states", what:"See which services are provisioned",
+          why:"Bootstrap provisions the base connected services; desired vs actual shows what is really applied.",
+          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
+        { sys:"Redbend", tool:"vehicle_software", what:"Inspect the embedded software stack",
+          why:"The car must run a current firmware/software stack; we also see available OTA updates.",
+          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
+      ] },
+    { id:"pairing", name:"Pairing", icon:IC.link,
+      desc:"How an activation request is paired to the vehicle — and how to diagnose a pairing that did not take. We find any service requested but not actually active (a drift), then open the OTA campaign that should have applied it.",
+      inputs:[{key:"vehicle", label:"Vehicle (VIN or owner)", placeholder:"Camille (has a Wi-Fi drift)", required:true}],
+      steps:[
+        { sys:"CVC", tool:"list_vehicles", what:"Resolve the vehicle",
+          why:"We need the VIN to inspect its service pairing.",
+          argsFn:()=>({}), after:(ctx,res,inp)=>{ ctx.vin = firstVinFor(res, inp.vehicle); } },
+        { sys:"ASAP", tool:"service_states", what:"Find desired vs actual — spot the drift",
+          why:"A pairing failure shows as desired ACTIVE but actual INACTIVE (in_sync=false).",
+          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null, after:(ctx,res)=>{ ctx.campaign = grabCampaign(res); } },
+        { sys:"Redbend", tool:"get_campaign", what:"Open the OTA campaign that should have paired it",
+          why:"The campaign trace shows exactly where pairing failed (e.g. download interrupted).",
+          argsFn:ctx=> ctx.campaign? {campaign_id:ctx.campaign} : null,
+          skipNote:"No drift found — every requested service is actually active, so there is nothing to diagnose." },
+      ] },
+    { id:"activation", name:"Service Activation", icon:IC.toggle,
+      desc:"How a service is activated end to end: ASAP sets the desired state and dispatches an OTA campaign to Redbend; the actual state flips only once the campaign reaches the car.",
+      inputs:[
+        {key:"vehicle", label:"Vehicle (VIN or owner)", placeholder:"Walid", required:true},
+        {key:"service", label:"Service code", placeholder:"REMOTE_CLIMATE", default:"REMOTE_CLIMATE", required:true}],
+      steps:[
+        { sys:"CVC", tool:"list_vehicles", what:"Resolve the vehicle",
+          why:"Activation acts on a VIN.", argsFn:()=>({}),
+          after:(ctx,res,inp)=>{ ctx.vin = firstVinFor(res, inp.vehicle); } },
+        { sys:"CVC", tool:"get_vehicle", what:"Confirm the car is online before acting",
+          why:"You should not push a command to a car that is not connected.",
+          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
+        { sys:"ASAP", tool:"activate_service", what:"Set desired ACTIVE and dispatch to Redbend",
+          why:"ASAP is the control plane: it records the desired state and orchestrates the OTA campaign.",
+          argsFn:(ctx,inp)=> ctx.vin? {vin:ctx.vin, service_code:(inp.service||"REMOTE_CLIMATE")} : null,
+          after:(ctx,res)=>{ ctx.campaign = grabCampaign(res); } },
+        { sys:"Redbend", tool:"get_campaign", what:"See the OTA campaign that applied it",
+          why:"Redbend is the data plane — it actually delivered the activation to the vehicle.",
+          argsFn:ctx=> ctx.campaign? {campaign_id:ctx.campaign} : null },
+        { sys:"ASAP", tool:"service_states", what:"Confirm actual now matches desired",
+          why:"After a successful campaign the service is in sync (desired = actual = ACTIVE).",
+          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
+      ] },
+    { id:"fota", name:"FOTA / SOTA", icon:IC.chip,
+      desc:"How an over-the-air firmware/software update is delivered: read the installed stack and available packages, launch the campaign, then verify the install bumped the module version.",
+      inputs:[
+        {key:"vehicle", label:"Vehicle (VIN or owner)", placeholder:"Walid", required:true},
+        {key:"package", label:"Package", placeholder:"FW_TCU_2025_06", default:"FW_TCU_2025_06", required:true}],
+      steps:[
+        { sys:"CVC", tool:"list_vehicles", what:"Resolve the vehicle", why:"Updates target a VIN.",
+          argsFn:()=>({}), after:(ctx,res,inp)=>{ ctx.vin = firstVinFor(res, inp.vehicle); } },
+        { sys:"Redbend", tool:"vehicle_software", what:"Read installed versions + available updates",
+          why:"You install against the current stack and only what is actually available.",
+          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
+        { sys:"Redbend", tool:"create_campaign", what:"Launch the FOTA campaign",
+          why:"Redbend downloads, verifies, installs and activates the package on the car.",
+          argsFn:(ctx,inp)=> ctx.vin? {vin:ctx.vin, type:"FOTA", target:(inp.package||"FW_TCU_2025_06")} : null,
+          after:(ctx,res)=>{ ctx.campaign = grabCampaign(res); } },
+        { sys:"Redbend", tool:"vehicle_software", what:"Verify the module version was bumped",
+          why:"A successful FOTA shows up as a new version on the targeted module.",
+          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
+      ] },
+    { id:"analytics", name:"Fleet Analytics", icon:IC.chart,
+      desc:"How the big picture is built from the data lake: fleet-wide usage, the most-used applications, and the anomalies that tie back to per-vehicle issues. This flow is fleet-wide and needs no VIN.",
+      inputs:[],
+      steps:[
+        { sys:"Data Lake", tool:"service_usage", what:"Fleet-wide usage summary",
+          why:"Scale of data, monthly active vehicles, total sessions and data volume.", argsFn:()=>({period:"30d"}) },
+        { sys:"Data Lake", tool:"top_applications", what:"Most-used applications + growth",
+          why:"Which connected services drive usage and which are growing or declining.", argsFn:()=>({limit:5}) },
+        { sys:"Data Lake", tool:"anomalies", what:"Flagged anomalies across the fleet",
+          why:"The macro signals that often trace back to a per-vehicle drift (e.g. Wi-Fi activations).", argsFn:()=>({}) },
+      ] },
+  ];
+
+  let currentFlow = null, flowBuilt = false;
+  function buildFlowTabs(){
+    if (flowBuilt) return; flowBuilt = true;
+    $("#flowTabs").innerHTML = FLOWS.map(f =>
+      '<button class="flowtab" data-id="'+f.id+'">'+f.icon+esc(f.name)+'</button>').join("");
+    document.querySelectorAll("#flowTabs .flowtab").forEach(t => t.addEventListener("click", () => selectFlow(t.dataset.id)));
+  }
+  function stepCardHtml(s, idx, state, args, res){
+    const cls = state==="skip" ? "step skip" : (state==="pending" ? "step pending" : "step");
+    const stTxt = state==="done" ? '<span class="dot ok"></span>completed' : state==="skip" ? 'skipped' : state==="run" ? '<span class="spin" style="width:13px;height:13px"></span>running' : 'not run';
+    return '<div class="flowconn"></div><div class="'+cls+'"><div class="sh"><span class="num">'+(idx+1)+'</span>'+
+      '<span class="sysbadge '+(SYS[s.sys]||"")+'">'+esc(s.sys)+'</span><span class="tool">'+esc(s.tool)+'</span>'+
+      '<span class="st">'+stTxt+'</span></div><div class="body"><div class="what">'+esc(s.what)+'</div><div class="why">'+esc(s.why)+'</div>'+
+      (args!=null?'<div class="args">arguments: '+esc(JSON.stringify(args))+'</div>':'')+
+      (state==="skip"?'<div class="why" style="margin-top:8px;color:var(--warning)">'+esc(s.skipNote||"Skipped — a prerequisite from a previous step was missing.")+'</div>':'')+
+      (res!=null?'<div class="res">'+esc(String(res).slice(0,1400))+'</div>':'')+'</div></div>';
+  }
+  function renderFlow(states){
+    const f = currentFlow;
+    $("#flowSteps").innerHTML = '<div class="panel" style="padding:18px"><div class="sec-title">'+esc(f.name)+' flow</div>'+
+      '<div class="sec-hint">'+esc(f.desc)+'</div><div style="margin-top:6px">'+
+      f.steps.map((s,i)=> stepCardHtml(s, i, (states&&states[i]&&states[i].state)||"idle", states&&states[i]?states[i].args:null, states&&states[i]?states[i].res:null)).join("")+
+      '</div></div>';
+  }
+  function selectFlow(id){
+    currentFlow = FLOWS.find(f=>f.id===id); if(!currentFlow) return;
+    document.querySelectorAll("#flowTabs .flowtab").forEach(t=>t.classList.toggle("sel", t.dataset.id===id));
+    $("#flowInputs").innerHTML = currentFlow.inputs.length ? currentFlow.inputs.map(p =>
+      '<div class="field"><label>'+esc(p.label)+(p.required?' *':'')+'</label><input class="inp" data-k="'+p.key+'" placeholder="'+esc(p.placeholder||"")+'" value="'+esc(p.default||"")+'" /></div>').join("")
+      : '<div class="sec-hint" style="margin:0">This flow is fleet-wide — no vehicle needed.</div>';
+    $("#flowSummary").textContent = "";
+    renderFlow(null);
+  }
+  function flowInputs(){ const o={}; document.querySelectorAll("#flowInputs [data-k]").forEach(i=>o[i.dataset.k]=i.value.trim()); return o; }
+  $("#flowReset").addEventListener("click", () => { if(currentFlow){ selectFlow(currentFlow.id); } });
+  $("#flowRun").addEventListener("click", async () => {
+    if (!currentFlow) return;
+    const inp = flowInputs();
+    for (const p of currentFlow.inputs){ if (p.required && !inp[p.key]){ $("#flowSummary").textContent = p.label+" is required."; return; } }
+    const btn=$("#flowRun"); btn.disabled=true; btn.textContent="Running…"; $("#flowSummary").textContent="";
+    const ctx = {}; const states = currentFlow.steps.map(()=>({state:"idle", args:null, res:null}));
+    let ran=0, skipped=0;
+    for (let i=0;i<currentFlow.steps.length;i++){
+      const s = currentFlow.steps[i];
+      let args; try { args = s.argsFn(ctx, inp); } catch(e){ args = null; }
+      if (args===null){ states[i]={state:"skip", args:null, res:null}; skipped++; renderFlow(states); continue; }
+      states[i]={state:"run", args, res:null}; renderFlow(states);
+      try{
+        const d = await api("POST","/api/tool",{ name:s.tool, arguments:args });
+        states[i]={state:"done", args, res:d.result};
+        if (s.after){ try{ s.after(ctx, String(d.result||""), inp); }catch(e){} }
+        ran++;
+      }catch(e){ states[i]={state:"done", args, res:"Error: "+e.message}; }
+      renderFlow(states);
+    }
+    $("#flowSummary").textContent = "Flow complete — "+ran+" tool"+(ran===1?"":"s")+" run"+(skipped?(", "+skipped+" skipped"):"")+(ctx.vin?(" · VIN "+ctx.vin):"")+".";
+    btn.disabled=false; btn.textContent="Run flow";
+  });
+  function loadDeepDive(){ buildFlowTabs(); if(!currentFlow) selectFlow(FLOWS[0].id); }
+
+  // ---------- insights: business analytics from the data lake ----------
+  function parseObjects(text){
+    const out=[]; let depth=0, start=-1, inStr=false, escp=false;
+    for (let i=0;i<text.length;i++){ const c=text[i];
+      if (inStr){ if(escp)escp=false; else if(c==='\\')escp=true; else if(c==='"')inStr=false; continue; }
+      if (c==='"'){inStr=true; continue;}
+      if (c==='{'){ if(depth===0)start=i; depth++; }
+      else if (c==='}'){ depth--; if(depth===0&&start>=0){ try{ out.push(JSON.parse(text.slice(start,i+1))); }catch(e){} start=-1; } }
+    }
+    return out;
+  }
+  const fmtN = n => n>=1e9?(n/1e9).toFixed(1)+"B" : n>=1e6?(n/1e6).toFixed(1)+"M" : n>=1e3?(n/1e3).toFixed(1)+"K" : String(n);
+  const SVG_UP='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-6 4 4 6-7"/><path d="M14 8h6v6"/></svg>';
+  const SVG_DN='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7l6 6 4-4 6 7"/><path d="M14 16h6v-6"/></svg>';
+  const SVG_WARN='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 16H3l9-16z"/><path d="M12 10v4M12 17h.01"/></svg>';
+  const SVG_INFO='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>';
+
+  async function loadInsights(){
+    if (!info || !(info.servers||[]).some(s => (s.tools||[]).some(t => t.name==="service_usage"))){
+      $("#insPatterns").innerHTML = '<div class="evi-empty">The analytics data lake is not connected. Add it under Data Sources.</div>';
+      $("#insKpis").innerHTML=""; $("#insApps").innerHTML=""; $("#insAnoms").innerHTML=""; return;
+    }
+    $("#insKpis").innerHTML = '<div class="kpi"><div class="kpi-label">Loading…</div></div>';
+    try{
+      const [u, a, an] = await Promise.all([
+        api("POST","/api/tool",{name:"service_usage",arguments:{period:"30d"}}),
+        api("POST","/api/tool",{name:"top_applications",arguments:{limit:6}}),
+        api("POST","/api/tool",{name:"anomalies",arguments:{}}),
+      ]);
+      const usage = parseObjects(u.result)[0] || {};
+      const apps = parseObjects(a.result);
+      const anoms = parseObjects(an.result);
+      renderInsights(usage, apps, anoms);
+    }catch(e){ $("#insKpis").innerHTML=""; $("#insPatterns").innerHTML='<div class="evi-empty">Could not load analytics: '+esc(e.message)+'</div>'; }
+  }
+  function renderInsights(usage, apps, anoms){
+    // KPIs
+    $("#insKpis").innerHTML =
+      kpi("Connected vehicles", fmtN(usage.connected_vehicles||0)) +
+      kpi("Monthly active", fmtN(usage.monthly_active_vehicles||0)) +
+      kpi("Sessions ("+(usage.period||"30d")+")", (usage.total_sessions_millions||0)+"M") +
+      kpi("Data volume", (usage.data_volume_tb||0)+" TB");
+    // Top apps with trend arrows
+    const sorted = apps.slice().sort((x,y)=>(y.sessions_millions||0)-(x.sessions_millions||0));
+    $("#insApps").innerHTML = sorted.length ? sorted.map(ap => {
+      const up = (ap.trend_pct||0) >= 0;
+      return '<div class="approw"><div><div class="an">'+esc(ap.application)+'</div><div class="ac">'+esc(ap.category||"")+'</div></div>'+
+        '<div class="av"><div class="as">'+(ap.sessions_millions||0)+'M</div><div class="at '+(up?"up":"down")+'">'+(up?"▲ +":"▼ ")+(ap.trend_pct||0)+'%</div></div></div>';
+    }).join("") : '<div class="evi-empty">No application data.</div>';
+    // Anomalies
+    const sev = {high:0,medium:1,low:2};
+    const sa = anoms.slice().sort((x,y)=>(sev[x.severity]??9)-(sev[y.severity]??9));
+    $("#insAnoms").innerHTML = sa.length ? sa.map(an =>
+      '<div class="anom"><div class="top"><span class="sev '+esc(an.severity)+'">'+esc(an.severity)+'</span>'+
+      '<span class="ttl">'+esc(an.application)+' — '+esc(an.metric)+'</span><span class="imp">'+fmtN(an.impacted_vehicles||0)+' vehicles</span></div>'+
+      '<div class="det">'+esc(an.detail)+'</div></div>').join("") : '<div class="evi-empty">No anomalies flagged.</div>';
+    // Auto patterns / business signals
+    const ins = [];
+    if (sorted.length){
+      const top = sorted[0];
+      ins.push(["info", SVG_INFO, "Most-used service: "+top.application, top.sessions_millions+"M sessions/month across "+fmtN(top.monthly_active_vehicles||0)+" active vehicles."]);
+      const grow = apps.slice().sort((x,y)=>(y.trend_pct||0)-(x.trend_pct||0))[0];
+      if (grow && grow.trend_pct>0) ins.push(["up", SVG_UP, "Fastest-growing: "+grow.application+" (+"+grow.trend_pct+"%)", "Rising demand — a candidate to prioritise, upsell or scale capacity for."]);
+      const dec = apps.slice().sort((x,y)=>(x.trend_pct||0)-(y.trend_pct||0))[0];
+      if (dec && dec.trend_pct<0) ins.push(["down", SVG_DN, "Declining: "+dec.application+" ("+dec.trend_pct+"%)", "Usage is falling — investigate churn, UX or a regression before it erodes further."]);
+    }
+    const high = sa.find(x=>x.severity==="high");
+    if (high) ins.push(["warn", SVG_WARN, "Top risk: "+high.application+" ("+fmtN(high.impacted_vehicles||0)+" vehicles)", high.detail]);
+    if (usage.data_volume_tb) ins.push(["info", SVG_INFO, "Scale: "+(usage.data_volume_tb)+" TB / "+(usage.total_sessions_millions||0)+"M sessions", "Ingesting ~"+fmtN(usage.events_ingested_per_second||0)+" events/sec across the fleet."]);
+    $("#insPatterns").innerHTML = ins.length ? ins.map(([k,svg,t,d]) =>
+      '<div class="insight"><div class="ig '+k+'">'+svg+'</div><div><div class="it">'+esc(t)+'</div><div class="id">'+esc(d)+'</div></div></div>').join("")
+      : '<div class="evi-empty">No signals detected.</div>';
+  }
+  function kpi(label, val){ return '<div class="kpi"><div class="kpi-label">'+esc(label)+'</div><div class="kpi-value">'+esc(val)+'</div></div>'; }
+  $("#insightsRefresh").addEventListener("click", loadInsights);
+  $("#insightsGenerate").addEventListener("click", async () => {
+    const btn=$("#insightsGenerate"); btn.disabled=true; btn.textContent="Analyzing…";
+    $("#insReport").innerHTML = '<div class="panel" style="padding:18px"><div class="analyzing" style="padding:0"><div class="lead"><span class="spin"></span> The AI agent is analyzing patterns and drafting business insights…</div><div class="bar"><i></i></div></div></div>';
+    const prompt = "Using the connected-services analytics, produce a concise executive insights brief: (1) the 2-3 most important patterns in service usage and growth, (2) the top business risk or anomaly and who/what it impacts, and (3) 3 concrete recommended actions with the reasoning. Ground every point in the data you retrieve.";
+    try{
+      const rec = await api("POST","/api/headless/run",{ question:prompt, provider:providerSel.value, model:"" });
+      $("#insReport").innerHTML = '<div class="panel" style="padding:18px"><div class="answer-head" style="padding:0 0 10px"><span class="ttl">Executive insight</span>'+
+        '<span class="meta"><span class="badge">'+esc(rec.provider||"")+'</span><span class="badge">'+(rec.tool_calls?rec.tool_calls.length:0)+' evidence</span><span class="badge '+(rec.error?"bad":"ok")+'">'+(rec.error?"error":"completed")+'</span></span></div>'+
+        '<div class="md">'+marked.parse(rec.answer||"*(no answer)*")+'</div></div>';
+    }catch(e){ $("#insReport").innerHTML = '<div class="panel" style="padding:18px"><div class="formmsg" style="color:var(--danger)">Error: '+esc(e.message)+'</div></div>'; }
+    btn.disabled=false; btn.textContent="Generate executive insight";
+  });
 
   // ---------- audit ----------
   async function loadAudit(){

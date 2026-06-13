@@ -377,6 +377,14 @@ def test_web_ui_endpoints(services, tmp_path_factory):
         assert len(info["servers"]) == 4
         all_tools = {t["name"] for s in info["servers"] for t in s["tools"]}
         assert {"list_vehicles", "activate_service", "vehicle_software", "list_datasets"} <= all_tools
+
+        # /api/tool runs a single tool directly (used by the Deep Dive flows)
+        tr = httpx.post(f"{base}/api/tool",
+                        json={"name": "list_vehicles", "arguments": {}}, timeout=30).json()
+        assert tr["ok"] is True and "VR7CONNECT00001" in tr["result"]
+        bad = httpx.post(f"{base}/api/tool",
+                         json={"name": "nope_tool", "arguments": {}}, timeout=30).json()
+        assert bad["ok"] is False
         assert info["tool_count"] == len(all_tools)
         assert any(l["id"] == "mock" for l in info["llms"])
 
