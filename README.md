@@ -1,74 +1,123 @@
-# MCP PoC — LLM Agent · MCP Server · FastAPI · SQLite
+# MCP PoC — Agentic AI over four APIs · Connected-Vehicle scenario
 
 [![CI](https://github.com/wld-code/PoC-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/wld-code/PoC-MCP/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 
-A complete, runnable proof-of-concept of the **Model Context Protocol (MCP)**: an
-LLM agent answers questions over data that lives behind a real HTTP API, by
-calling **MCP tools** instead of touching the backend directly.
+A complete, runnable **tutorial** for the **Model Context Protocol (MCP)** and
+**agentic AI**. An LLM agent reads live vehicle data and orchestrates service
+activations by calling **MCP tools** across **four backends** — never touching
+the APIs or databases directly.
 
-`Agent (LLM)` → `MCP server` → `FastAPI` → `SQLite` — each piece is its own
-container, fully Dockerized, with a Kubernetes path and end-to-end tests.
+> 📚 **Start here:** [`docs/06-agentic-ai-tutorial.md`](docs/06-agentic-ai-tutorial.md)
+> — a step-by-step walkthrough of what an agent is, what makes it *agentic*, and
+> how it uses the four MCP servers below.
+
+## The scenario
+
+Four fake backends model a car maker's connected-services platform:
+
+| System | What it is | Does | API | MCP server |
+| --- | --- | --- | --- | --- |
+| **CVC** | *Connected Vehicle Cloud* — the **car gateway** | **Reads** live telemetry: fleet, online status, charge, location, diagnostics | `cvc_api/` `:8022` | `cvc_mcp/` `:8012` |
+| **ASAP** | *Activation Service & Aggregation Platform* | **Orchestrates** activation: owns each service's **desired vs actual** state and reconciles by dispatching to Redbend | `asap_api/` `:8021` | `asap_mcp/` `:8011` |
+| **Redbend** | OTA update platform | **Executes** on the vehicle: FOTA (firmware), SOTA (software) and **service-activation** campaigns | `redbend_api/` `:8023` | `redbend_mcp/` `:8013` |
+| **Data Lake** | analytics warehouse | **Aggregates** massive connected-services data across the whole installed base: datasets, usage, top apps, trends, anomalies | `datalake_api/` `:8024` | `datalake_mcp/` `:8014` |
+
+One agent connects to **all four** MCP servers, sees one merged toolbox, and
+reasons across them — e.g. *"is the car online (CVC) before I request activation
+(ASAP), executed by an OTA campaign (Redbend)?"*, or *"what's the fleet-wide
+anomaly (Data Lake) and which car does it trace back to?"*
 
 ```
-┌──────────┐   MCP (Streamable HTTP)   ┌──────────────┐   HTTP   ┌──────────┐   SQL   ┌────────┐
-│  Agent   │ ────────────────────────▶ │  MCP server  │ ───────▶ │  FastAPI │ ──────▶ │ SQLite │
-│  (LLM)   │ ◀──────────────────────── │  (FastMCP)   │ ◀─────── │   API    │ ◀────── │  .db   │
-└──────────┘     tools / results       └──────────────┘   JSON   └──────────┘  rows   └────────┘
+            ┌──────────────────────────────────────────────────────────────────┐
+            │                            AGENT (LLM)                            │
+            │                one merged toolbox of 19 MCP tools                 │
+            └────────┬────────────────┬───────────────┬────────────────┬───────┘
+                 MCP │            MCP │           MCP │            MCP │
+            ┌────────▼───┐   ┌────────▼────┐  ┌───────▼─────┐  ┌───────▼──────┐
+            │  cvc-mcp   │   │  asap-mcp   │  │ redbend-mcp │  │ datalake-mcp │
+            │ 4 read     │   │ 6 orchestr. │  │ 4 OTA tools │  │ 5 analytics  │
+            └─────┬──────┘   └─────┬───────┘  └──────┬──────┘  └──────┬───────┘
+                  │                │                 │                │
+            ┌─────▼──────┐   ┌─────▼──────┐   ┌───────▼──────┐  ┌──────▼───────┐
+            │  cvc-api   │   │  asap-api  │──▶│  redbend-api │  │ datalake-api │
+            │ car gateway│   │ desired/   │   │ OTA execution│  │ billions of  │
+            │  (reads)   │   │ actual     │   │ FOTA/SOTA/svc│  │ rows · TB    │
+            └────────────┘   └────────────┘   └──────────────┘  └──────────────┘
+                          ASAP reconciles desired→actual by
+                          dispatching a campaign to Redbend
 ```
 
 ## Why MCP
 
-The agent never queries the API or the database. It only sees **tools** the MCP
-server advertises (self-describing: name + description + JSON schema). You can
-swap the backend, add authentication, or add tools **without changing the agent**.
-The MCP server is a thin adapter; the FastAPI service stays the single source of
-truth.
+The agent never queries an API or a database. It only sees **tools** the MCP
+servers advertise (self-describing: name + description + JSON schema). You can
+add a tool, swap a backend, or add auth **without changing the agent** — it
+rediscovers tools at startup. MCP servers are thin adapters; the APIs stay the
+single source of truth.
 
 ## Features
 
-- **Provider-agnostic agent** — Claude (default), OpenAI, or Mistral via one env
-  var; a `mock` provider runs the full pipeline with **no API key and no cost**.
-- **Two agents** — `headless` (automation/CI/Jobs) and a modern **web chat UI**.
-- **Official MCP Python SDK (FastMCP)** over Streamable HTTP — production-friendly.
-- **Dockerized** end-to-end + **Kubernetes** manifests + step-by-step tutorials.
-- **End-to-end tests** that boot the real services and exercise every layer.
+- **Four fake APIs** — `asap-api` (orchestration, desired/actual), `cvc-api`
+  (car gateway), `redbend-api` (OTA / activation executor) and `datalake-api`
+  (massive connected-services analytics), serving seeded random-but-reproducible
+  data, no database needed.
+- **Four MCP servers** — thin FastMCP adapters, one per API, over Streamable HTTP.
+- **Control-plane / data-plane split** — ASAP tracks the **desired** state and
+  reconciles it to the **actual** state by dispatching campaigns to Redbend; a
+  failed campaign shows up as a **drift** the agent can detect and explain.
+- **Multi-MCP agent** — connects to **all four** servers and routes each tool
+  call to its owner (`agent/mcp_client.py`); the web app uses a
+  `DynamicMCPManager` so servers can be added/removed at runtime.
+- **Provider-agnostic** — Claude (default), OpenAI, OpenRouter, or Mistral via one
+  env var (or switch live in the UI); a `mock` provider runs the full pipeline
+  with **no API key and no cost**.
+- **Live CRUD in the UI** — manage **MCP servers** and **LLM configs** from the
+  browser (add/edit/remove), no restart.
+- **Three agent entry points** — `headless.py` (automation/CI/Jobs), `web.py`
+  (executive web app, see below), `agent.py` (interactive REPL).
+- **End-to-end tests** that boot all eight real services and drive every layer.
 
 ---
 
 ## Quick start
 
-**Requirements:** Docker + Docker Compose. An LLM API key is optional (use
-`LLM_PROVIDER=mock` to run for free).
+**Requirements:** Docker + Docker Compose. An LLM key is optional (`mock` is free).
 
 ```bash
-cp .env.example .env          # then edit .env (see Configuration below)
-docker compose up -d --build  # builds & starts api, mcp-server, agent-web
+cp .env.example .env             # then edit .env if you have an LLM key
+docker compose up -d --build     # 4 APIs + 4 MCP servers + agent-web
 ```
 
-Open the **web chat** → http://localhost:8002
+Open the **web chat** → http://localhost:8002 and try:
 
-Run the **headless agent**:
+- `List the connected vehicles`
+- `Is Walid's car online, and what services are active on it?`
+- `Activate remote climate on Walid's car`
+- `Try to enable smart charging on the Opel` *(eligibility failure → FAILED)*
+
+Run the **headless agent** (with a JSON trace of every tool call):
 
 ```bash
-docker compose run --rm agent python headless.py "Top 3 products by revenue?"
+docker compose run --rm agent python headless.py --json \
+  "Is Walid's car online, and which services are active on it?"
 ```
 
-Hit the **raw API** directly:
+Hit the **raw APIs** directly:
 
 ```bash
-curl localhost:8000/sales/summary
-open  http://localhost:8000/docs        # interactive OpenAPI docs
+curl localhost:8022/vehicles                              # CVC: the fleet
+curl localhost:8021/services                               # ASAP: the service catalogue
+curl localhost:8021/vehicles/VR7CONNECT00002/service-states # ASAP: desired vs actual (note the Wi-Fi drift)
+curl localhost:8023/vehicles/VR7CONNECT00001/software       # Redbend: on-vehicle software + updates
+curl localhost:8024/anomalies                               # Data Lake: fleet-wide flagged anomalies
+open http://localhost:8021/docs                            # OpenAPI docs (ASAP · CVC :8022 · Redbend :8023 · Data Lake :8024)
 ```
 
 > **No key? No problem.** Set `LLM_PROVIDER=mock` in `.env` — the agents still
-> call the real MCP tools and return live data; only the natural-language
-> phrasing is skipped. This is exactly what the test suite uses.
-
-> **Ports already in use?** The defaults are `8000/8001/8002`. Override the host
-> ports in `.env` with `API_PORT`, `MCP_PORT`, `WEB_PORT` (containers keep using
-> 8000/8001/8002 internally).
+> call the real MCP tools on both servers and return live data; only the
+> natural-language phrasing is skipped. This is exactly what the tests use.
 
 ---
 
@@ -78,57 +127,112 @@ open  http://localhost:8000/docs        # interactive OpenAPI docs
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `LLM_PROVIDER` | `claude` · `openai` · `mistral` · `mock` | `claude` |
+| `LLM_PROVIDER` | `claude` · `openai` · `openrouter` · `mistral` · `mock` | `claude` |
 | `LLM_MODEL` | Override the model id (optional) | provider default |
-| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `MISTRAL_API_KEY` | Key for the chosen provider | — |
-| `API_PORT` / `MCP_PORT` / `WEB_PORT` | Host port overrides | `8000` / `8001` / `8002` |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `MISTRAL_API_KEY` | Key for the chosen provider | — |
+| `ASAP_API_PORT` / `CVC_API_PORT` / `REDBEND_API_PORT` / `DATALAKE_API_PORT` | Host ports for the four APIs | `8021` / `8022` / `8023` / `8024` |
+| `ASAP_MCP_PORT` / `CVC_MCP_PORT` / `REDBEND_MCP_PORT` / `DATALAKE_MCP_PORT` | Host ports for the four MCP servers | `8011` / `8012` / `8013` / `8014` |
+| `WEB_PORT` | Host port for the web chat UI | `8002` |
+| `MCP_SERVER_URLS` | Comma-separated MCP endpoints the agent connects to | both local servers |
 
-Provider defaults:
-
-| `LLM_PROVIDER` | Default model | Key |
-| --- | --- | --- |
-| `claude` | `claude-opus-4-8` | `ANTHROPIC_API_KEY` |
-| `openai` | `gpt-4o` | `OPENAI_API_KEY` |
-| `mistral` | `mistral-large-latest` | `MISTRAL_API_KEY` |
-| `mock` | — (no LLM) | none |
-
-The MCP tool layer is identical across providers; only the per-provider
-function-calling format differs (`agent/providers.py`).
+Provider defaults: `claude` → `claude-opus-4-8`, `openai` → `gpt-4o`,
+`openrouter` → `openai/gpt-4o-mini` (any tool-capable OpenRouter model id),
+`mistral` → `mistral-large-latest`, `mock` → no LLM. The MCP tool layer is
+identical across providers; only the function-calling format differs
+(`agent/providers.py`). OpenRouter reuses the OpenAI Chat Completions format, so
+one `OPENROUTER_API_KEY` unlocks hundreds of models behind the same agent loop.
 
 ---
 
-## The two agents
+## The agents
 
 | Agent | File | For |
 | --- | --- | --- |
-| **Headless** | `agent/headless.py` | Automation, CI, cron, Kubernetes Jobs, pipelines. Query in → answer out → exit. `--json` emits the answer + the tool calls made. |
-| **Web UI** | `agent/web.py` | A browser chat: Markdown answers, MCP tool-call chips, clear error messages. Served at `/`; chat at `POST /api/chat`. |
+| **Headless** | `agent/headless.py` | Automation, CI, cron, K8s Jobs, pipelines. Query in → answer out → exit. `--json` emits the answer + the tool calls made. |
+| **Web UI** | `agent/web.py` | "AI Operations Control" — a 7-view executive web app (see below). Served at `/`. |
+| **REPL** | `agent/agent.py` | Interactive terminal session. |
 
-(Plus `agent/agent.py`, an interactive terminal REPL.)
+All three share the same core: `MultiMCPClient` (both servers) + the
+provider-agnostic LLM loop in `providers.py`.
 
-```bash
-# Headless — one-shot
-docker compose run --rm agent python headless.py --json "Products under $50"
+### The web app — "AI Operations Control"
 
-# Web UI — already running from `docker compose up`
-open http://localhost:8002
-```
+A premium, executive-style single-page app (no internal MCP terminology surfaced
+to the user) with a sidebar of seven views:
+
+- **Mission Control** — the interactive agent. Ask a question; get an *Executive
+  Answer* plus an **Evidence** panel listing the tools the agent used. A header
+  selector switches the active LLM live.
+- **Automations** — a catalog of **predefined AI agents** (Bootstrap
+  Investigator, Pairing Investigator, Service Activation Analyzer, FOTA Operator,
+  Fleet Anomaly Scout, Usage Analyst, Custom). Configure one with arguments, then
+  **Run now** or **Schedule** it like a recurring job (5 min / 15 min / hourly /
+  daily / custom).
+- **Deep Dive** — understand each **core process flow** end to end (Bootstrap,
+  Pairing, Service Activation, FOTA/SOTA, Fleet Analytics): the ordered steps,
+  which system/tool each uses and *why* — then **run the flow for a VIN** and see
+  each tool's real result step by step.
+- **Insights** — **business insights** auto-derived from the data lake: usage
+  KPIs, top applications with growth trends, flagged risks/anomalies, detected
+  patterns (fastest-growing, declining, top risk), and a one-click LLM-generated
+  executive brief.
+- **Data Sources** — **CRUD** the connected tool servers (add/edit/remove at
+  runtime; tools join the agent's toolbox instantly).
+- **AI Models** — **CRUD** the LLM configurations (kind, key, endpoint, model;
+  set a default).
+- **Process Flows** — **CRUD** the Deep Dive flows themselves: build a process
+  from ordered tool steps (system, tool, what/why, argument templates with
+  `{input}`/`{vin}`/`{campaign}`, and what to capture) — no code. New flows appear
+  in Deep Dive immediately.
+- **Audit Trail** — a log of every investigation and automated run.
+
+Backend endpoints: `GET /api/info`, `GET /api/tools`, `POST /api/tool` (run one
+tool — used by Deep Dive), `POST /api/chat`,
+`GET|POST|PUT|DELETE /api/mcp/servers[/{id}]` (data-source CRUD),
+`GET|POST|PUT|DELETE /api/llms[/{id}]` + `PUT /api/llms/{id}/default` (model CRUD),
+`GET|POST|PUT|DELETE /api/flows[/{id}]` + `POST /api/flows/reset` (process-flow CRUD),
+`POST /api/headless/run`, `GET /api/headless/runs`,
+`POST|GET|DELETE /api/headless/triggers`.
+
+> Data-source and model edits are **in-memory** (re-seeded from `MCP_SERVER_URLS`
+> and the env keys at startup), which suits the PoC; persist them for real use.
 
 ---
 
 ## Testing
 
-End-to-end tests boot the **real** API + MCP server and drive every layer
-(API → MCP → headless agent → web agent) using the `mock` provider — **no key,
-no cost, deterministic**.
+End-to-end tests boot the **eight real services** (four APIs + four MCP servers)
+and drive every layer — APIs → MCP (merged) → headless agent → web agent — using
+the `mock` provider: **no key, no cost, deterministic**.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r api/requirements.txt -r mcp_server/requirements.txt \
+pip install -r asap_api/requirements.txt -r cvc_api/requirements.txt \
+            -r redbend_api/requirements.txt -r datalake_api/requirements.txt \
+            -r asap_mcp/requirements.txt -r cvc_mcp/requirements.txt \
+            -r redbend_mcp/requirements.txt -r datalake_mcp/requirements.txt \
             -r agent/requirements.txt -r tests/requirements.txt
 pytest -v
-# → 5 passed, 1 skipped   (the skip is the optional live-LLM test; set a key to run it)
+# → 15 passed, 1 skipped  (the skip is the optional live-LLM test; set a key to run it)
 ```
+
+What each test covers:
+
+| Test | Verifies |
+| --- | --- |
+| `test_apis_healthy` / `test_cvc_fleet_and_telemetry` | the APIs boot; CVC returns the 5-car fleet + telemetry |
+| `test_asap_catalog_and_activation` | ASAP catalogue + an eligibility **FAILED** operation |
+| `test_asap_reconcile_via_redbend` | activation runs eligibility→set-desired→**dispatch to Redbend**→reconcile; actual flips to ACTIVE |
+| `test_asap_desired_actual_drift` | a requested service whose Redbend campaign failed shows desired≠actual (drift) |
+| `test_redbend_software_and_campaign` | Redbend reports on-vehicle software; a FOTA campaign completes and bumps the module version |
+| `test_datalake_analytics` | the Data Lake reports billion-row datasets, usage, app trends and the flagged anomaly |
+| `test_multi_mcp_tools_and_call` | the agent merges tools from **all four** servers and calls one |
+| `test_cvc_online_offline_narrative` | the hero car is online, the Opel is offline |
+| `test_headless_agent` / `test_headless_agent_cross_server` | the headless agent runs the loop and routes calls across servers |
+| `test_web_agent` / `test_web_ui_endpoints` | the web UI serves, lists tools, runs a chat, and exposes per-server grouping + triggers |
+| `test_mcp_crud` | add an MCP server at runtime → its tools appear → remove it; unreachable URL errors cleanly |
+| `test_llm_crud` | create an LLM config, use it in a run, edit, set default, delete |
+| `test_headless_agent_live` | *(optional)* a real LLM resolves an owner to a VIN and reads across servers |
 
 ---
 
@@ -136,16 +240,27 @@ pytest -v
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r api/requirements.txt -r mcp_server/requirements.txt -r agent/requirements.txt
+pip install -r asap_api/requirements.txt -r cvc_api/requirements.txt \
+            -r redbend_api/requirements.txt -r datalake_api/requirements.txt \
+            -r asap_mcp/requirements.txt -r cvc_mcp/requirements.txt \
+            -r redbend_mcp/requirements.txt -r datalake_mcp/requirements.txt -r agent/requirements.txt
 
-# terminal 1 — API (auto-seeds SQLite)
-cd api && DB_PATH=/tmp/poc.db uvicorn main:app --port 8000
-# terminal 2 — MCP server
-cd mcp_server && API_BASE_URL=http://localhost:8000 python server.py
-# terminal 3 — an agent (set a key, or LLM_PROVIDER=mock)
-cd agent && export MCP_SERVER_URL=http://localhost:8001/mcp
-python headless.py "Which products cost more than 400?"   # headless
-uvicorn web:app --port 8002                                # UI → :8002
+# terminal 1 — Redbend API (ASAP needs it)
+cd redbend_api && uvicorn main:app --port 8023
+# terminal 2 — ASAP API (points at Redbend)
+cd asap_api && REDBEND_BASE_URL=http://localhost:8023 uvicorn main:app --port 8021
+# terminal 3 — CVC API   |   terminal 4 — Data Lake API
+cd cvc_api && uvicorn main:app --port 8022
+cd datalake_api && uvicorn main:app --port 8024
+# terminals 5-8 — the MCP servers
+cd asap_mcp     && API_BASE_URL=http://localhost:8021 python server.py
+cd cvc_mcp      && API_BASE_URL=http://localhost:8022 python server.py
+cd redbend_mcp  && API_BASE_URL=http://localhost:8023 python server.py
+cd datalake_mcp && API_BASE_URL=http://localhost:8024 python server.py
+# terminal 9 — an agent (set a key, or LLM_PROVIDER=mock)
+cd agent && export MCP_SERVER_URLS=http://localhost:8011/mcp,http://localhost:8012/mcp,http://localhost:8013/mcp,http://localhost:8014/mcp
+python headless.py "What's the main fleet-wide anomaly?"       # headless
+uvicorn web:app --port 8002                                    # UI → :8002
 ```
 
 ---
@@ -154,12 +269,19 @@ uvicorn web:app --port 8002                                # UI → :8002
 
 ```
 .
-├── api/            FastAPI + SQLite data service
-├── mcp_server/     MCP server (FastMCP) wrapping the API as tools
-├── agent/          Provider-agnostic core + headless.py · web.py · agent.py
+├── asap_api/       FastAPI — orchestration: desired/actual state, reconcile via Redbend (ASAP)
+├── cvc_api/        FastAPI — car gateway / telemetry (CVC)
+├── redbend_api/    FastAPI — OTA execution: FOTA/SOTA + service-activation campaigns (Redbend)
+├── datalake_api/   FastAPI — analytics: datasets, usage, trends, anomalies (Data Lake)
+├── asap_mcp/       MCP server wrapping ASAP as 6 orchestration tools
+├── cvc_mcp/        MCP server wrapping CVC as 4 read tools
+├── redbend_mcp/    MCP server wrapping Redbend as 4 OTA tools
+├── datalake_mcp/   MCP server wrapping the Data Lake as 5 analytics tools
+├── agent/          Multi-MCP agent core + headless.py · web.py · agent.py
 ├── tests/          End-to-end test suite (pytest)
-├── k8s/            Kubernetes manifests (Deployments, Services, PVC, Job, Secret)
-├── docs/           Tutorials
+├── docs/           Tutorials (start with 06)
+├── api/  mcp_server/   Original single-API example (products/sales) — kept for reference
+├── k8s/            Kubernetes manifests
 ├── docker-compose.yml
 └── .env.example
 ```
@@ -168,11 +290,15 @@ uvicorn web:app --port 8002                                # UI → :8002
 
 | Doc | Contents |
 | --- | --- |
+| [`docs/06-agentic-ai-tutorial.md`](docs/06-agentic-ai-tutorial.md) | **Start here** — what an agent is, the agentic loop, the four-system scenario (CVC/ASAP/Redbend/Data Lake), desired vs actual state, a full run, how to extend |
 | [`docs/01-mcp-tutorial.md`](docs/01-mcp-tutorial.md) | MCP concepts, tool design, transports, LLM bridging |
-| [`docs/02-docker.md`](docs/02-docker.md) | Images, Compose, prod hardening |
-| [`docs/03-kubernetes.md`](docs/03-kubernetes.md) | Deploy the stack to Kubernetes, step by step |
-| [`docs/04-agents-and-tests.md`](docs/04-agents-and-tests.md) | The two agents, the `mock` provider, the e2e tests |
-| [`docs/05-agent-architecture.md`](docs/05-agent-architecture.md) | What an agent is, the agentic loop, how to build one, the agents in this repo |
+| [`docs/05-agent-architecture.md`](docs/05-agent-architecture.md) | Agents in general: the loop, how to build one |
+| [`docs/04-agents-and-tests.md`](docs/04-agents-and-tests.md) | The agents, the `mock` provider, the e2e tests |
+| [`docs/02-docker.md`](docs/02-docker.md) · [`docs/03-kubernetes.md`](docs/03-kubernetes.md) | Containerisation & deployment |
+
+> Docs 01–05 were written for the original single-API products/sales example
+> (still in `api/` + `mcp_server/`). Every MCP and agent concept they explain
+> applies identically here — only the domain and the tool names differ.
 
 ---
 
@@ -182,25 +308,19 @@ uvicorn web:app --port 8002                                # UI → :8002
 | --- | --- |
 | Web chat shows **"Insufficient API credits"** | The LLM account has no credits. Add credits, or set `LLM_PROVIDER=mock` and `docker compose up -d`. |
 | Web chat shows **"Invalid or missing API key"** | Key wrong or not matching `LLM_PROVIDER`; fix `.env`, then `docker compose up -d`. |
-| `bind: address already in use` | Ports `8000`/`8002` taken. Set `API_PORT` / `WEB_PORT` in `.env`. |
+| `bind: address already in use` | A host port is taken. Override it in `.env` (e.g. `WEB_PORT`, `ASAP_API_PORT`). |
 | Want to watch tool calls live | `docker compose logs -f agent-web` |
-
-## Common commands
-
-```bash
-docker compose ps                  # status
-docker compose logs -f agent-web   # follow the UI agent
-docker compose up -d --build       # rebuild after a change
-docker compose down                # stop (keep data);  add -v to wipe the DB volume
-```
 
 ## Notes
 
 - Secrets live only in `.env` (git-ignored) / Kubernetes Secrets — never in images.
-- SQLite is single-writer (fine for a PoC); swap for Postgres for real load — the
-  MCP server and agents don't change.
-- Verified end-to-end on this machine: full data path returns live data, both
-  agents complete the tool loop, `pytest` → **5 passed, 1 skipped**.
+- The four APIs keep state **in memory** (fine for a PoC); restart resets it. The
+  fleet, catalogue, software inventory and analytics are seeded deterministically
+  so demos are reproducible.
+- Verified end-to-end on this machine: four APIs + four MCP servers boot, the
+  agent merges **19 tools** across servers, ASAP reconciles desired→actual via a
+  Redbend campaign, the Data Lake answers fleet-wide questions, and `pytest` →
+  **15 passed, 1 skipped** (16 with a live key).
 
 ## License
 

@@ -1,15 +1,16 @@
 """Headless agent — no UI, no interaction. One question in, one answer out.
 
 Designed for automation: cron jobs, CI steps, Kubernetes Jobs, shell pipelines.
-It connects to the MCP server, lets the LLM use the MCP tools, prints the
-answer, and exits with code 0 (or non-zero on failure).
+It connects to BOTH MCP servers (the ASAP orchestrator and the CVC car gateway),
+lets the LLM use any of their tools, prints the answer, and exits with code 0
+(or non-zero on failure).
 
 Usage:
-    python headless.py "What are the top 3 products by revenue?"
-    QUESTION="Total revenue?" python headless.py
-    python headless.py --json "Which products cost more than 400?"
+    python headless.py "Is Walid's car online, and what services are active on it?"
+    QUESTION="Activate remote climate on the first electric vehicle" python headless.py
+    python headless.py --json "Which vehicles have a diagnostic trouble code?"
 
-Config (env): LLM_PROVIDER, LLM_MODEL, MCP_SERVER_URL, and the provider key
+Config (env): LLM_PROVIDER, LLM_MODEL, MCP_SERVER_URLS, and the provider key
 (ANTHROPIC_API_KEY / OPENAI_API_KEY / MISTRAL_API_KEY). Use LLM_PROVIDER=mock
 to run without any LLM/key.
 """
@@ -21,17 +22,16 @@ import json
 import os
 import sys
 
-from mcp_client import MCPClient
+from mcp_client import MultiMCPClient
 from providers import get_provider
-
-MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://localhost:8001/mcp")
+from servers import MCP_SERVER_URLS
 
 
 async def ask(question: str, as_json: bool) -> int:
     provider_name = os.environ.get("LLM_PROVIDER", "claude")
     tool_calls: list[dict] = []
 
-    async with MCPClient(MCP_SERVER_URL) as mcp:
+    async with MultiMCPClient(MCP_SERVER_URLS) as mcp:
         tools = await mcp.list_tools()
         provider = get_provider(provider_name)
 

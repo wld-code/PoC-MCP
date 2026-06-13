@@ -2,7 +2,8 @@ name: CI
 
 # Runs the end-to-end test suite on every push and pull request.
 # The tests use the deterministic `mock` provider, so they need no API key
-# and cost nothing — CI boots the real API + MCP server and drives every layer.
+# and cost nothing — CI boots all four real APIs + four MCP servers and drives
+# every layer (APIs -> MCP -> headless agent -> web agent).
 
 on:
   push:
@@ -25,8 +26,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r api/requirements.txt \
-                      -r mcp_server/requirements.txt \
+          pip install -r asap_api/requirements.txt \
+                      -r cvc_api/requirements.txt \
+                      -r redbend_api/requirements.txt \
+                      -r datalake_api/requirements.txt \
+                      -r asap_mcp/requirements.txt \
+                      -r cvc_mcp/requirements.txt \
+                      -r redbend_mcp/requirements.txt \
+                      -r datalake_mcp/requirements.txt \
                       -r agent/requirements.txt \
                       -r tests/requirements.txt
 

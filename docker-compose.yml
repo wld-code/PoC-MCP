@@ -1,45 +1,124 @@
+# Connected-vehicle tutorial stack.
+#
+#   4 fake APIs ...... asap-api (orchestration, desired/actual) + cvc-api
+#                      (car gateway) + redbend-api (OTA / activation executor)
+#                      + datalake-api (massive connected-services analytics)
+#   4 MCP servers .... asap-mcp + cvc-mcp + redbend-mcp + datalake-mcp
+#   2 agents ......... agent (headless/CLI, on demand) + agent-web (UI)
+#
+# The agents connect to ALL FOUR MCP servers and see one merged toolbox.
+# ASAP orchestrates by calling Redbend, which executes the OTA/activation.
+#
+#   cp .env.example .env && docker compose up -d --build
+#   open http://localhost:8002
+#   docker compose run --rm agent python headless.py "Is Walid's car online?"
 services:
-  api:
-    build: ./api
+  # ---- Fake backend APIs ---------------------------------------------------
+  asap-api:
+    build: ./asap_api
     environment:
-      DB_PATH: /data/data.db
-      AUTO_SEED: "1"
-    volumes:
-      - api-data:/data
+      REDBEND_BASE_URL: http://redbend-api:8023   # ASAP dispatches campaigns here
     ports:
-      - "${API_PORT:-8000}:8000"   # host port overridable via .env (API_PORT)
+      - "${ASAP_API_PORT:-8021}:8021"
+    depends_on:
+      redbend-api:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8021/health')"]
       interval: 10s
       timeout: 3s
       retries: 5
 
-  mcp-server:
-    build: ./mcp_server
-    environment:
-      API_BASE_URL: http://api:8000
+  cvc-api:
+    build: ./cvc_api
     ports:
-      - "${MCP_PORT:-8001}:8001"   # host port overridable via .env (MCP_PORT)
+      - "${CVC_API_PORT:-8022}:8022"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8022/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  redbend-api:
+    build: ./redbend_api
+    ports:
+      - "${REDBEND_API_PORT:-8023}:8023"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8023/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  datalake-api:
+    build: ./datalake_api
+    ports:
+      - "${DATALAKE_API_PORT:-8024}:8024"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8024/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ---- MCP servers (thin adapters over each API) ---------------------------
+  asap-mcp:
+    build: ./asap_mcp
+    environment:
+      API_BASE_URL: http://asap-api:8021
+    ports:
+      - "${ASAP_MCP_PORT:-8011}:8011"
     depends_on:
-      api:
+      asap-api:
         condition: service_healthy
 
-  # HEADLESS agent — one-shot/interactive, so it does NOT auto-start.
-  # Run a one-shot query:
-  #   docker compose run --rm agent python headless.py "Top 3 products by revenue?"
-  # Or the interactive CLI:
-  #   docker compose run --rm agent python agent.py
+  cvc-mcp:
+    build: ./cvc_mcp
+    environment:
+      API_BASE_URL: http://cvc-api:8022
+    ports:
+      - "${CVC_MCP_PORT:-8012}:8012"
+    depends_on:
+      cvc-api:
+        condition: service_healthy
+
+  redbend-mcp:
+    build: ./redbend_mcp
+    environment:
+      API_BASE_URL: http://redbend-api:8023
+    ports:
+      - "${REDBEND_MCP_PORT:-8013}:8013"
+    depends_on:
+      redbend-api:
+        condition: service_healthy
+
+  datalake-mcp:
+    build: ./datalake_mcp
+    environment:
+      API_BASE_URL: http://datalake-api:8024
+    ports:
+      - "${DATALAKE_MCP_PORT:-8014}:8014"
+    depends_on:
+      datalake-api:
+        condition: service_healthy
+
+  # ---- Agents --------------------------------------------------------------
+  # HEADLESS / interactive agent — does NOT auto-start. Run on demand:
+  #   docker compose run --rm agent python headless.py "Is Walid's car online?"
+  #   docker compose run --rm agent python agent.py        # interactive REPL
   agent:
     build: ./agent
     environment:
-      MCP_SERVER_URL: http://mcp-server:8001/mcp
+      MCP_SERVER_URLS: http://asap-mcp:8011/mcp,http://cvc-mcp:8012/mcp,http://redbend-mcp:8013/mcp,http://datalake-mcp:8014/mcp
       LLM_PROVIDER: ${LLM_PROVIDER:-claude}
       LLM_MODEL: ${LLM_MODEL:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
     depends_on:
-      - mcp-server
+      - asap-mcp
+      - cvc-mcp
+      - redbend-mcp
+      - datalake-mcp
     profiles: ["manual"]     # don't start with `up`; run on demand
     stdin_open: true
     tty: true
@@ -49,16 +128,17 @@ services:
     build: ./agent
     command: ["uvicorn", "web:app", "--host", "0.0.0.0", "--port", "8002"]
     environment:
-      MCP_SERVER_URL: http://mcp-server:8001/mcp
+      MCP_SERVER_URLS: http://asap-mcp:8011/mcp,http://cvc-mcp:8012/mcp,http://redbend-mcp:8013/mcp,http://datalake-mcp:8014/mcp
       LLM_PROVIDER: ${LLM_PROVIDER:-claude}
       LLM_MODEL: ${LLM_MODEL:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
     ports:
       - "${WEB_PORT:-8002}:8002"   # host port overridable via .env (WEB_PORT)
     depends_on:
-      - mcp-server
-
-volumes:
-  api-data:
+      - asap-mcp
+      - cvc-mcp
+      - redbend-mcp
+      - datalake-mcp
