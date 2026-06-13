@@ -700,6 +700,18 @@ INDEX_HTML = r"""<!doctype html>
   .stack{display:flex; flex-direction:column;}
   .gap16>*{margin-bottom:16px;}
 
+  /* predefined agents */
+  .agentgrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; margin-top:14px;}
+  .agentcard{border:1px solid var(--border); border-radius:16px; padding:14px; cursor:pointer; background:var(--surface); transition:.12s; text-align:left;}
+  .agentcard:hover{border-color:var(--accent); box-shadow:0 6px 18px rgba(37,99,235,.10); transform:translateY(-1px);}
+  .agentcard.sel{border-color:var(--accent); background:var(--accent-soft);}
+  .agentcard .h{display:flex; align-items:center; gap:10px;}
+  .agenticon{width:34px; height:34px; flex:0 0 34px; border-radius:10px; display:grid; place-items:center; color:var(--accent-dark); background:var(--accent-soft);}
+  .agenticon svg{width:18px; height:18px;}
+  .agentcard .nm{font-weight:650; font-size:13.5px;}
+  .agentcard .cat{font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--faint);}
+  .agentcard .ds{font-size:12px; color:var(--muted); margin-top:9px;}
+
   @media (max-width:1100px){
     .app{grid-template-columns:1fr;}
     .sidebar{display:none;}
@@ -786,25 +798,43 @@ INDEX_HTML = r"""<!doctype html>
           <section class="stream" id="stream"></section>
         </section>
 
-        <!-- ===== AUTOMATIONS (headless) ===== -->
+        <!-- ===== AUTOMATIONS (predefined agents) ===== -->
         <section class="view" id="view-automations">
           <div class="stack gap16">
             <div class="panel" style="padding:18px">
-              <div class="sec-title">Run a task once</div>
-              <div class="sec-hint">The agent runs the task headless and returns an auditable result.</div>
-              <div class="suggestions" id="autoPresets" style="margin-bottom:12px"></div>
-              <div class="field"><label>Task</label><textarea id="autoTask" rows="2" placeholder="e.g. List every vehicle that needs attention and why"></textarea></div>
-              <div class="rowflex"><button class="btn-primary" id="autoRun">Run task</button><span class="sec-hint" style="margin:0">Uses the model selected top-right.</span></div>
-              <div id="autoResult"></div>
+              <div class="sec-title">AI agents</div>
+              <div class="sec-hint">Predefined investigators and operators. Pick one, set its inputs, then run it now or schedule it like a recurring job.</div>
+              <div class="agentgrid" id="agentGrid"></div>
             </div>
-            <div class="panel" style="padding:18px">
-              <div class="sec-title">Scheduled automations</div>
-              <div class="sec-hint">Re-run a task on a timer (fires immediately, then every N seconds).</div>
-              <div class="rowflex">
-                <div class="field"><label>Label</label><input class="inp" id="trigLabel" placeholder="Fleet health watch" /></div>
-                <div class="field" style="max-width:150px"><label>Every (seconds)</label><input class="inp" id="trigEvery" type="number" min="5" value="30" /></div>
-                <button class="btn" id="trigAdd">Add automation</button>
+
+            <div class="panel" id="agentConfig" style="padding:18px; display:none">
+              <div class="top" style="display:flex; align-items:center; gap:11px">
+                <div class="agenticon" id="agentCfgIcon"></div>
+                <div><div class="sec-title" id="agentCfgTitle" style="margin:0"></div><div class="sec-hint" id="agentCfgDesc" style="margin:0"></div></div>
               </div>
+              <div class="rowflex" id="agentParams" style="margin-top:14px"></div>
+              <div class="rowflex" style="margin-top:14px; align-items:flex-end">
+                <button class="btn-primary" id="agentRun">Run now</button>
+                <div class="field" style="max-width:170px"><label>Schedule</label>
+                  <select class="inp" id="schedEvery">
+                    <option value="0">Don't schedule</option>
+                    <option value="300">Every 5 minutes</option>
+                    <option value="900">Every 15 minutes</option>
+                    <option value="3600">Hourly</option>
+                    <option value="86400">Daily</option>
+                    <option value="custom">Custom…</option>
+                  </select>
+                </div>
+                <div class="field" id="schedCustomWrap" style="max-width:130px; display:none"><label>Every (seconds)</label><input class="inp" id="schedCustom" type="number" min="5" value="120" /></div>
+                <button class="btn" id="agentSchedule">Schedule</button>
+              </div>
+              <div class="formmsg" id="agentMsg"></div>
+              <div id="agentResult"></div>
+            </div>
+
+            <div class="panel" style="padding:18px">
+              <div class="sec-title">Scheduled agents</div>
+              <div class="sec-hint">Recurring agent runs — each fires immediately, then on its interval.</div>
               <div id="trigList" style="margin-top:14px"></div>
             </div>
           </div>
@@ -915,11 +945,52 @@ INDEX_HTML = r"""<!doctype html>
     "Recommend the next best action",
     "Show the evidence behind your answer",
   ];
-  const AUTO_PRESETS = [
-    "Give me a health report for the whole fleet",
-    "Which items need attention right now?",
-    "List anything requested but not actually applied, and why",
-    "Summarize the latest activity",
+  // Predefined agents (playbooks). Each builds a headless prompt from its inputs.
+  const IC = {
+    plug:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6M15 2v6M7 8h10v3a5 5 0 01-10 0V8zM12 16v6"/></svg>',
+    link:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007 0l2-2a5 5 0 00-7-7l-1 1M14 11a5 5 0 00-7 0l-2 2a5 5 0 007 7l1-1"/></svg>',
+    toggle:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="16" cy="12" r="3"/></svg>',
+    chip:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>',
+    alert:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 16H3l9-16z"/><path d="M12 10v4M12 17h.01"/></svg>',
+    chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5M4 19h16M8 16v-4M12 16V8M16 16v-7"/></svg>',
+    search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>',
+  };
+  const VEHICLE_PARAM = { key:"vehicle", label:"Vehicle (VIN or owner)", placeholder:"e.g. Walid or VR7CONNECT00001", required:true };
+  const PLAYBOOKS = [
+    { id:"bootstrap", name:"Bootstrap Investigator", category:"Diagnostics", icon:IC.plug,
+      desc:"Checks a vehicle's connectivity bootstrap: known, online and reachable, software version, and which services are provisioned.",
+      params:[VEHICLE_PARAM],
+      prompt:a => `Investigate the connectivity bootstrap of ${a.vehicle}'s vehicle: confirm it is a known connected vehicle, whether it is currently online via the gateway, its platform/software version, and which connected services are provisioned. Summarize onboarding readiness and flag anything blocking it.` },
+    { id:"pairing", name:"Pairing Investigator", category:"Diagnostics", icon:IC.link,
+      desc:"Investigates service pairing/activation: which services were requested but did not actually apply, and why.",
+      params:[VEHICLE_PARAM],
+      prompt:a => `For ${a.vehicle}'s vehicle, review the desired vs actual state of every connected service. Identify any service requested (desired ACTIVE) but not actually active — a pairing/activation failure — and explain the root cause using the related OTA campaign.` },
+    { id:"activation", name:"Service Activation Analyzer", category:"Operations", icon:IC.toggle,
+      desc:"Analyzes service activation for a vehicle or the whole fleet: what's active, drifting, and recent operations.",
+      params:[{ key:"vehicle", label:"Vehicle (VIN or owner — optional)", placeholder:"blank = fleet-wide", required:false }],
+      prompt:a => a.vehicle
+        ? `Analyze service activations for ${a.vehicle}'s vehicle: list active services, any drift (desired != actual), and the most recent activation operations with their status.`
+        : `Analyze recent service-activation operations across the fleet: which succeeded, which failed, and any services stuck in drift (requested but not actually active).` },
+    { id:"fota", name:"FOTA Operator", category:"OTA", icon:IC.chip,
+      desc:"Checks available firmware/software updates for a vehicle and can launch an OTA campaign for a target package.",
+      params:[VEHICLE_PARAM,
+        { key:"action", label:"Action", type:"select", options:["Check available updates","Install a specific package"], default:"Check available updates" },
+        { key:"target", label:"Target package (for install)", placeholder:"e.g. FW_TCU_2025_06", required:false }],
+      prompt:a => a.action === "Install a specific package"
+        ? `For ${a.vehicle}'s vehicle, check the available OTA updates, then install the package ${a.target||"(specify a package)"} via an OTA campaign and report the campaign result and the new module version.`
+        : `For ${a.vehicle}'s vehicle, list installed software/firmware per module and any available OTA (FOTA/SOTA) updates, and recommend which to install.` },
+    { id:"anomaly", name:"Fleet Anomaly Scout", category:"Analytics", icon:IC.alert,
+      desc:"Scans the connected-services analytics for the top anomalies across the fleet and what they trace back to.",
+      params:[],
+      prompt:a => `Scan the connected-services analytics for the most significant anomalies across the fleet. For the top anomaly report severity, impacted vehicles, the affected application, and what per-vehicle issue it likely traces back to.` },
+    { id:"usage", name:"Usage Analyst", category:"Analytics", icon:IC.chart,
+      desc:"Summarizes fleet-wide usage: data scale, most-used applications and growth trends.",
+      params:[{ key:"period", label:"Period", placeholder:"e.g. 30d", default:"30d", required:false }],
+      prompt:a => `Give an executive summary of connected-services usage for ${a.period||"the last 30 days"}: the scale of available data, monthly active vehicles, the top applications by usage and which are growing or declining fastest.` },
+    { id:"custom", name:"Custom Investigation", category:"Custom", icon:IC.search,
+      desc:"Ask the agent anything; runs headless with full auditable evidence.",
+      params:[{ key:"question", label:"Question", type:"textarea", placeholder:"Describe what to investigate…", required:true }],
+      prompt:a => a.question },
   ];
   const SOURCE_LABELS = { "cvc-gateway":"Vehicle Gateway", "asap-orchestrator":"Service Orchestration", "redbend-ota":"OTA Platform", "datalake-insights":"Connected-Services Data Lake", "demo-data":"Operational Data" };
   const prettySource = n => SOURCE_LABELS[n] || String(n).replace(/[-_]+/g," ").replace(/\b\w/g, c => c.toUpperCase());
@@ -1106,10 +1177,8 @@ INDEX_HTML = r"""<!doctype html>
   window.delModel = async (id) => { try{ await api("DELETE","/api/llms/"+id); }catch(e){ alert(e.message); return; } await loadModels(); await loadInfo(); };
   window.setDefaultModel = async (id) => { try{ await api("PUT","/api/llms/"+id+"/default"); }catch(e){} await loadModels(); await loadInfo(); };
 
-  // ---------- automations (headless) ----------
-  let autoBuilt = false;
-  function buildAutoPresets(){ if (autoBuilt) return; autoBuilt=true;
-    AUTO_PRESETS.forEach(p => { const b=el("button","chip",esc(p)); b.type="button"; b.onclick=()=>{ $("#autoTask").value=p; }; $("#autoPresets").appendChild(b); }); }
+  // ---------- automations: predefined agents ----------
+  let currentAgent = null, agentsBuilt = false;
   function runCardHtml(rec){
     const tools=(rec.tool_calls||[]).map(c=>'<span class="tchip">'+esc(c.name)+'</span>').join(" ");
     return '<div class="card" style="margin-top:13px; padding:14px"><div class="answer-head" style="padding:0 0 10px"><span class="ttl">Result</span>'+
@@ -1118,19 +1187,72 @@ INDEX_HTML = r"""<!doctype html>
       (tools?'<div class="toolchips" style="margin:0 0 10px">'+tools+'</div>':'')+
       '<div class="md">'+marked.parse(rec.answer||"*(no answer)*")+'</div></div>';
   }
-  $("#autoRun").addEventListener("click", async () => {
-    const q = $("#autoTask").value.trim(); if (!q){ $("#autoTask").focus(); return; }
-    const btn=$("#autoRun"); btn.disabled=true; btn.textContent="Running…";
-    $("#autoResult").innerHTML = '<div class="card" style="margin-top:13px; padding:16px"><div class="analyzing" style="padding:0"><div class="lead"><span class="spin"></span> Running the agent…</div><div class="bar"><i></i></div></div></div>';
-    try{ const rec = await api("POST","/api/headless/run",{ question:q, provider:providerSel.value, model:"" }); $("#autoResult").innerHTML = runCardHtml(rec); }
-    catch(e){ $("#autoResult").innerHTML = '<div class="formmsg" style="color:var(--danger)">Error: '+esc(e.message)+'</div>'; }
-    btn.disabled=false; btn.textContent="Run task";
+  function buildAgentGrid(){
+    if (agentsBuilt) return; agentsBuilt = true;
+    $("#agentGrid").innerHTML = PLAYBOOKS.map(p =>
+      '<button class="agentcard" data-id="'+p.id+'"><div class="h"><div class="agenticon">'+p.icon+'</div>'+
+      '<div><div class="nm">'+esc(p.name)+'</div><div class="cat">'+esc(p.category)+'</div></div></div>'+
+      '<div class="ds">'+esc(p.desc)+'</div></button>').join("");
+    document.querySelectorAll("#agentGrid .agentcard").forEach(c =>
+      c.addEventListener("click", () => selectAgent(c.dataset.id)));
+  }
+  function selectAgent(id){
+    const a = PLAYBOOKS.find(p => p.id === id); if (!a) return;
+    currentAgent = a;
+    document.querySelectorAll("#agentGrid .agentcard").forEach(c => c.classList.toggle("sel", c.dataset.id===id));
+    $("#agentCfgIcon").innerHTML = a.icon;
+    $("#agentCfgTitle").textContent = a.name;
+    $("#agentCfgDesc").textContent = a.desc;
+    $("#agentParams").innerHTML = a.params.length ? a.params.map(p => {
+      const w = p.type==="textarea" ? "flex:1; min-width:240px" : "";
+      let ctrl;
+      if (p.type==="select") ctrl = '<select class="inp" data-k="'+p.key+'">'+p.options.map(o=>'<option'+(o===p.default?' selected':'')+'>'+esc(o)+'</option>').join("")+'</select>';
+      else if (p.type==="textarea") ctrl = '<textarea class="inp" rows="2" data-k="'+p.key+'" placeholder="'+esc(p.placeholder||"")+'"></textarea>';
+      else ctrl = '<input class="inp" data-k="'+p.key+'" placeholder="'+esc(p.placeholder||"")+'" value="'+esc(p.default||"")+'" />';
+      return '<div class="field" style="'+w+'"><label>'+esc(p.label)+(p.required?' *':'')+'</label>'+ctrl+'</div>';
+    }).join("") : '<div class="sec-hint" style="margin:0">No inputs needed — this agent runs on the whole fleet.</div>';
+    $("#agentConfig").style.display = "";
+    $("#agentMsg").textContent = ""; $("#agentResult").innerHTML = "";
+    $("#agentConfig").scrollIntoView({behavior:"smooth", block:"nearest"});
+  }
+  function collectArgs(){
+    const args = {};
+    document.querySelectorAll("#agentParams [data-k]").forEach(i => { args[i.dataset.k] = i.value.trim(); });
+    return args;
+  }
+  function validateAgent(){
+    if (!currentAgent) return false;
+    for (const p of currentAgent.params){
+      if (p.required){
+        const i = document.querySelector('#agentParams [data-k="'+p.key+'"]');
+        if (!i || !i.value.trim()){ if(i) i.focus(); $("#agentMsg").textContent = p.label+" is required."; return false; }
+      }
+    }
+    return true;
+  }
+  $("#schedEvery").addEventListener("change", () => {
+    $("#schedCustomWrap").style.display = $("#schedEvery").value==="custom" ? "" : "none";
   });
-  $("#trigAdd").addEventListener("click", async () => {
-    const q = $("#autoTask").value.trim(); if (!q){ $("#autoTask").focus(); return; }
-    try{ await api("POST","/api/headless/triggers",{ question:q, interval_seconds:parseInt($("#trigEvery").value||"30",10), label:$("#trigLabel").value.trim()||null, provider:providerSel.value, model:"" });
-      $("#trigLabel").value=""; refreshTriggers(); }
-    catch(e){ alert("Could not add automation: "+e.message); }
+  $("#agentRun").addEventListener("click", async () => {
+    if (!validateAgent()) return;
+    const q = currentAgent.prompt(collectArgs());
+    const btn=$("#agentRun"); btn.disabled=true; btn.textContent="Running…"; $("#agentMsg").textContent="";
+    $("#agentResult").innerHTML = '<div class="card" style="margin-top:13px; padding:16px"><div class="analyzing" style="padding:0"><div class="lead"><span class="spin"></span> '+esc(currentAgent.name)+' is investigating…</div><div class="bar"><i></i></div></div></div>';
+    try{ const rec = await api("POST","/api/headless/run",{ question:q, provider:providerSel.value, model:"" }); $("#agentResult").innerHTML = runCardHtml(rec); refreshTriggers(); }
+    catch(e){ $("#agentResult").innerHTML = '<div class="formmsg" style="color:var(--danger)">Error: '+esc(e.message)+'</div>'; }
+    btn.disabled=false; btn.textContent="Run now";
+  });
+  $("#agentSchedule").addEventListener("click", async () => {
+    if (!validateAgent()) return;
+    let every = $("#schedEvery").value;
+    if (every === "0"){ $("#schedCustomWrap").style.display=""; $("#schedEvery").value="300"; $("#agentMsg").textContent="Pick a schedule interval above."; return; }
+    every = every === "custom" ? parseInt($("#schedCustom").value||"120",10) : parseInt(every,10);
+    const args = collectArgs();
+    const first = currentAgent.params[0] ? args[currentAgent.params[0].key] : "";
+    const label = currentAgent.name + (first ? " — "+first : "");
+    try{ await api("POST","/api/headless/triggers",{ question:currentAgent.prompt(args), interval_seconds:every, label, provider:providerSel.value, model:"" });
+      $("#agentMsg").textContent = "Scheduled: "+label+" (every "+every+"s)."; refreshTriggers(); }
+    catch(e){ $("#agentMsg").textContent = "Could not schedule: "+e.message; }
   });
   async function refreshTriggers(){
     const box=$("#trigList");
@@ -1145,7 +1267,7 @@ INDEX_HTML = r"""<!doctype html>
     }catch(e){ box.innerHTML='<div class="evi-empty">'+esc(e.message)+'</div>'; }
   }
   window.stopTrigger = async (id) => { try{ await api("DELETE","/api/headless/triggers/"+id); }catch(e){} refreshTriggers(); };
-  function loadAutomations(){ buildAutoPresets(); refreshTriggers(); }
+  function loadAutomations(){ buildAgentGrid(); refreshTriggers(); }
 
   // ---------- audit ----------
   async function loadAudit(){
