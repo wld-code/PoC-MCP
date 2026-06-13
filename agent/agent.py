@@ -1,15 +1,15 @@
-"""Interactive CLI agent that chats with the API *through* the MCP server.
+"""Interactive CLI agent that chats with the fleet *through* the MCP servers.
 
 Flow:
-  1. Connect to the MCP server (Streamable HTTP).
-  2. Discover available tools.
+  1. Connect to both MCP servers (Streamable HTTP): ASAP + CVC.
+  2. Discover and merge their tools into one toolbox.
   3. Start a REPL: each user message goes to the selected LLM provider, which
-     may call MCP tools (which call the API) before producing an answer.
+     may call any MCP tool (which calls an API) before producing an answer.
 
 Run:  python agent.py            # interactive
       python agent.py "..."      # single question, then exit
 
-Config (env): LLM_PROVIDER, LLM_MODEL, MCP_SERVER_URL, plus the provider's
+Config (env): LLM_PROVIDER, LLM_MODEL, MCP_SERVER_URLS, plus the provider's
 API key (ANTHROPIC_API_KEY / OPENAI_API_KEY / MISTRAL_API_KEY).
 """
 from __future__ import annotations
@@ -18,18 +18,17 @@ import asyncio
 import os
 import sys
 
-from mcp_client import MCPClient
+from mcp_client import MultiMCPClient
 from providers import get_provider
-
-MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://localhost:8001/mcp")
+from servers import MCP_SERVER_URLS
 
 
 async def run(one_shot: str | None) -> None:
     provider_name = os.environ.get("LLM_PROVIDER", "claude")
     print(f"• LLM provider: {provider_name}")
-    print(f"• MCP server:   {MCP_SERVER_URL}")
+    print(f"• MCP servers:  {MCP_SERVER_URLS}")
 
-    async with MCPClient(MCP_SERVER_URL) as mcp:
+    async with MultiMCPClient(MCP_SERVER_URLS) as mcp:
         tools = await mcp.list_tools()
         print(f"• Tools:        {', '.join(t['name'] for t in tools)}\n")
 
@@ -44,7 +43,8 @@ async def run(one_shot: str | None) -> None:
             print(f"\nassistant> {answer}")
             return
 
-        print("Ask me about products or sales. Type 'exit' to quit.\n")
+        print("Ask me about the connected fleet or to activate a service. "
+              "Type 'exit' to quit.\n")
         while True:
             try:
                 user = input("you> ").strip()
