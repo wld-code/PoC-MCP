@@ -78,6 +78,102 @@ def _seed_llms() -> tuple[dict, list, str]:
     return llms, order, default
 
 
+def _default_flows() -> list[dict]:
+    """The built-in Deep Dive process flows, in the declarative (configurable) form.
+
+    A flow has inputs and ordered steps. Each step runs one tool; its `args` are
+    templates: `{vehicle}` etc. reference an input, `{vin}`/`{campaign}` reference
+    values captured by an earlier step (a step is skipped if a referenced capture
+    is missing). `capture` lists what to extract from the result for later steps.
+    """
+    veh = {"key": "vehicle", "label": "Vehicle (VIN or owner)",
+           "placeholder": "Walid or VR7CONNECT00001", "default": "", "required": True}
+    return [
+        {"id": "bootstrap", "name": "Bootstrap",
+         "description": "How a connected vehicle comes online and gets its base services provisioned: confirm it is known, reachable, see provisioned services, and check the embedded software stack.",
+         "inputs": [veh],
+         "steps": [
+            {"system": "CVC", "tool": "list_vehicles", "what": "Resolve the vehicle and confirm it exists",
+             "why": "Every flow starts from a VIN; the gateway is the registry of connected vehicles.",
+             "args": {}, "capture": ["vin"]},
+            {"system": "CVC", "tool": "get_vehicle", "what": "Check the car is online and reachable",
+             "why": "Bootstrap needs live connectivity — energy, signal, software version, online status.",
+             "args": {"vin": "{vin}"}, "capture": []},
+            {"system": "ASAP", "tool": "service_states", "what": "See which services are provisioned",
+             "why": "Bootstrap provisions the base services; desired vs actual shows what is really applied.",
+             "args": {"vin": "{vin}"}, "capture": []},
+            {"system": "Redbend", "tool": "vehicle_software", "what": "Inspect the embedded software stack",
+             "why": "The car must run a current firmware/software stack; we also see available OTA updates.",
+             "args": {"vin": "{vin}"}, "capture": []},
+         ]},
+        {"id": "pairing", "name": "Pairing",
+         "description": "How an activation request is paired to the vehicle — and how to diagnose a pairing that did not take: find a service requested but not actually active (drift), then open the OTA campaign that should have applied it.",
+         "inputs": [dict(veh, placeholder="Camille (has a Wi-Fi drift)")],
+         "steps": [
+            {"system": "CVC", "tool": "list_vehicles", "what": "Resolve the vehicle",
+             "why": "We need the VIN to inspect its service pairing.", "args": {}, "capture": ["vin"]},
+            {"system": "ASAP", "tool": "service_states", "what": "Find desired vs actual — spot the drift",
+             "why": "A pairing failure shows as desired ACTIVE but actual INACTIVE (in_sync=false).",
+             "args": {"vin": "{vin}"}, "capture": ["campaign"]},
+            {"system": "Redbend", "tool": "get_campaign", "what": "Open the OTA campaign that should have paired it",
+             "why": "The campaign trace shows exactly where pairing failed (e.g. download interrupted).",
+             "args": {"campaign_id": "{campaign}"}, "capture": [],
+             "skip_note": "No drift found — every requested service is actually active, so there is nothing to diagnose."},
+         ]},
+        {"id": "activation", "name": "Service Activation",
+         "description": "How a service is activated end to end: ASAP sets the desired state and dispatches an OTA campaign to Redbend; the actual state flips only once the campaign reaches the car.",
+         "inputs": [veh, {"key": "service", "label": "Service code", "placeholder": "REMOTE_CLIMATE",
+                          "default": "REMOTE_CLIMATE", "required": True}],
+         "steps": [
+            {"system": "CVC", "tool": "list_vehicles", "what": "Resolve the vehicle",
+             "why": "Activation acts on a VIN.", "args": {}, "capture": ["vin"]},
+            {"system": "CVC", "tool": "get_vehicle", "what": "Confirm the car is online before acting",
+             "why": "You should not push a command to a car that is not connected.",
+             "args": {"vin": "{vin}"}, "capture": []},
+            {"system": "ASAP", "tool": "activate_service", "what": "Set desired ACTIVE and dispatch to Redbend",
+             "why": "ASAP is the control plane: it records the desired state and orchestrates the OTA campaign.",
+             "args": {"vin": "{vin}", "service_code": "{service}"}, "capture": ["campaign"]},
+            {"system": "Redbend", "tool": "get_campaign", "what": "See the OTA campaign that applied it",
+             "why": "Redbend is the data plane — it actually delivered the activation to the vehicle.",
+             "args": {"campaign_id": "{campaign}"}, "capture": []},
+            {"system": "ASAP", "tool": "service_states", "what": "Confirm actual now matches desired",
+             "why": "After a successful campaign the service is in sync (desired = actual = ACTIVE).",
+             "args": {"vin": "{vin}"}, "capture": []},
+         ]},
+        {"id": "fota", "name": "FOTA / SOTA",
+         "description": "How an over-the-air update is delivered: read the installed stack and available packages, launch the campaign, then verify the install bumped the module version.",
+         "inputs": [veh, {"key": "package", "label": "Package", "placeholder": "FW_TCU_2025_06",
+                          "default": "FW_TCU_2025_06", "required": True}],
+         "steps": [
+            {"system": "CVC", "tool": "list_vehicles", "what": "Resolve the vehicle",
+             "why": "Updates target a VIN.", "args": {}, "capture": ["vin"]},
+            {"system": "Redbend", "tool": "vehicle_software", "what": "Read installed versions + available updates",
+             "why": "You install against the current stack and only what is actually available.",
+             "args": {"vin": "{vin}"}, "capture": []},
+            {"system": "Redbend", "tool": "create_campaign", "what": "Launch the FOTA campaign",
+             "why": "Redbend downloads, verifies, installs and activates the package on the car.",
+             "args": {"vin": "{vin}", "type": "FOTA", "target": "{package}"}, "capture": ["campaign"]},
+            {"system": "Redbend", "tool": "vehicle_software", "what": "Verify the module version was bumped",
+             "why": "A successful FOTA shows up as a new version on the targeted module.",
+             "args": {"vin": "{vin}"}, "capture": []},
+         ]},
+        {"id": "analytics", "name": "Fleet Analytics",
+         "description": "How the big picture is built from the data lake: fleet-wide usage, the most-used applications, and the anomalies that tie back to per-vehicle issues. Fleet-wide — no VIN.",
+         "inputs": [],
+         "steps": [
+            {"system": "Data Lake", "tool": "service_usage", "what": "Fleet-wide usage summary",
+             "why": "Scale of data, monthly active vehicles, total sessions and data volume.",
+             "args": {"period": "30d"}, "capture": []},
+            {"system": "Data Lake", "tool": "top_applications", "what": "Most-used applications + growth",
+             "why": "Which connected services drive usage and which are growing or declining.",
+             "args": {"limit": "5"}, "capture": []},
+            {"system": "Data Lake", "tool": "anomalies", "what": "Flagged anomalies across the fleet",
+             "why": "Macro signals that often trace back to a per-vehicle drift (e.g. Wi-Fi activations).",
+             "args": {}, "capture": []},
+         ]},
+    ]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     manager = DynamicMCPManager()
@@ -97,6 +193,7 @@ async def lifespan(app: FastAPI):
     app.state.lock = asyncio.Lock()
     app.state.history: list[dict] = []
     app.state.triggers: dict[int, dict] = {}
+    app.state.flows = _default_flows()           # configurable Deep Dive process flows
     try:
         yield
     finally:
@@ -162,6 +259,23 @@ class LlmUpdateIn(BaseModel):
     model: str | None = None
     base_url: str | None = None
     api_key: str | None = None     # empty string = leave the stored key unchanged
+
+
+class FlowStep(BaseModel):
+    system: str = ""
+    tool: str
+    what: str = ""
+    why: str = ""
+    args: dict = {}                # arg name -> template ("{vin}", "{service}", literal)
+    capture: list[str] = []        # what to extract for later steps: "vin" | "campaign"
+    skip_note: str | None = None
+
+
+class FlowIn(BaseModel):
+    name: str
+    description: str = ""
+    inputs: list[dict] = []        # [{key,label,placeholder,default,required}]
+    steps: list[FlowStep] = []
 
 
 # --------------------------------------------------------------------------- #
@@ -406,6 +520,62 @@ async def llm_delete(lid: str, request: Request) -> dict:
         if sess.get("llm_id") == lid:
             del state.sessions[s]
     return {"removed": lid, "default": state.default_llm}
+
+
+# --------------------------------------------------------------------------- #
+# Process-flow (Deep Dive) CRUD                                                #
+# --------------------------------------------------------------------------- #
+def _flow_slug(name: str, taken: set) -> str:
+    import re as _re
+    base = _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "flow"
+    sid, i = base, 2
+    while sid in taken:
+        sid, i = f"{base}-{i}", i + 1
+    return sid
+
+
+@app.get("/api/flows")
+async def flows_list(request: Request) -> dict:
+    return {"flows": request.app.state.flows}
+
+
+@app.post("/api/flows")
+async def flow_add(body: FlowIn, request: Request) -> dict:
+    state = request.app.state
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="name is required")
+    flow = body.model_dump()
+    flow["id"] = _flow_slug(body.name, {f["id"] for f in state.flows})
+    state.flows.append(flow)
+    return flow
+
+
+@app.put("/api/flows/{fid}")
+async def flow_update(fid: str, body: FlowIn, request: Request) -> dict:
+    state = request.app.state
+    for i, f in enumerate(state.flows):
+        if f["id"] == fid:
+            flow = body.model_dump()
+            flow["id"] = fid
+            state.flows[i] = flow
+            return flow
+    raise HTTPException(status_code=404, detail="flow not found")
+
+
+@app.delete("/api/flows/{fid}")
+async def flow_delete(fid: str, request: Request) -> dict:
+    state = request.app.state
+    before = len(state.flows)
+    state.flows = [f for f in state.flows if f["id"] != fid]
+    if len(state.flows) == before:
+        raise HTTPException(status_code=404, detail="flow not found")
+    return {"removed": fid}
+
+
+@app.post("/api/flows/reset")
+async def flows_reset(request: Request) -> dict:
+    request.app.state.flows = _default_flows()
+    return {"flows": request.app.state.flows}
 
 
 # --------------------------------------------------------------------------- #
@@ -778,6 +948,23 @@ INDEX_HTML = r"""<!doctype html>
   .anom .imp{margin-left:auto; font-size:11.5px; color:var(--faint);}
   @media (max-width:900px){ .insgrid{grid-template-columns:1fr;} }
 
+  /* process-flow editor */
+  .firow{display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;}
+  .firow .inp{flex:1; min-width:110px;}
+  .firow .chk{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted);}
+  .festep{border:1px solid var(--border); border-radius:14px; padding:13px; margin-bottom:11px; background:var(--surface-2);}
+  .festep .sn{display:flex; align-items:center; gap:9px; margin-bottom:9px;}
+  .festep .sn .num{width:22px; height:22px; flex:0 0 22px; border-radius:50%; display:grid; place-items:center; font-size:11px; font-weight:700; background:var(--accent-soft); color:var(--accent-dark);}
+  .festep .sn .acts{margin-left:auto; display:flex; gap:5px;}
+  .festep .grid2{display:grid; grid-template-columns:170px 1fr; gap:8px; margin-bottom:8px;}
+  .festep textarea.inp{min-height:54px;}
+  .festep .chk{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); margin-right:14px;}
+  .flowmgr{border:1px solid var(--border); border-radius:16px; padding:14px 16px; margin-bottom:12px; background:var(--surface);}
+  .flowmgr .top{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .flowmgr .nm{font-weight:650; font-size:14px;} .flowmgr .meta{font-size:12.5px; color:var(--muted); margin-top:6px;}
+  .flowmgr .acts{margin-left:auto; display:flex; gap:7px;}
+  @media (max-width:700px){ .festep .grid2{grid-template-columns:1fr;} }
+
   @media (max-width:1100px){
     .app{grid-template-columns:1fr;}
     .sidebar{display:none;}
@@ -821,6 +1008,10 @@ INDEX_HTML = r"""<!doctype html>
       <button class="nav-item" data-view="models">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 3v2M5 7l1.5 1.5M3 14h2M19 7l-1.5 1.5M21 14h-2M9 18h6M10 21h4"/><path d="M12 8a4 4 0 00-2.5 7.2c.3.3.5.7.5 1.1V17h4v-.7c0-.4.2-.8.5-1.1A4 4 0 0012 8z"/></svg>
         AI Models
+      </button>
+      <button class="nav-item" data-view="flows">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="15" y="15" width="6" height="6" rx="1.5"/><path d="M9 6h6a3 3 0 013 3v6"/></svg>
+        Process Flows
       </button>
       <button class="nav-item" data-view="audit">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
@@ -945,6 +1136,43 @@ INDEX_HTML = r"""<!doctype html>
           </div>
           <div class="panel" style="padding:18px; margin-top:16px"><div class="sec-title">Risks &amp; anomalies</div><div class="sec-hint">Flagged across the fleet — each can trace back to a per-vehicle issue.</div><div id="insAnoms" style="margin-top:10px"></div></div>
           <div id="insReport" style="margin-top:16px"></div>
+        </section>
+
+        <!-- ===== PROCESS FLOWS (configure deep dive) ===== -->
+        <section class="view" id="view-flows">
+          <div class="panel" style="padding:18px; margin-bottom:16px">
+            <div class="rowflex" style="align-items:center">
+              <div style="flex:1"><div class="sec-title">Process flows</div>
+                <div class="sec-hint" style="margin:0">Configure the Deep Dive flows: the ordered tool steps that make up each core process. Build new ones, edit or remove them — no code.</div></div>
+              <button class="btn-primary" id="flowNew">New flow</button>
+              <button class="btn" id="flowResetDefaults">Reset to defaults</button>
+            </div>
+          </div>
+          <div id="flowMgrList"></div>
+
+          <div class="panel" id="flowEditor" style="padding:18px; display:none">
+            <div class="sec-title" id="flowEdTitle">New flow</div>
+            <div class="rowflex">
+              <div class="field"><label>Name *</label><input class="inp" id="feName" placeholder="e.g. Connectivity Health Check" /></div>
+            </div>
+            <div class="field"><label>Description</label><textarea class="inp" id="feDesc" rows="2" placeholder="What this process does, in one or two sentences."></textarea></div>
+
+            <div class="sec-title" style="font-size:13px; margin-top:8px">Inputs</div>
+            <div class="sec-hint">Values the user enters before running (e.g. a vehicle). Reference them in step arguments as <code>{key}</code>.</div>
+            <div id="feInputs" style="margin-top:10px"></div>
+            <button class="btn btn-sm" id="feAddInput" style="margin-top:6px">+ Add input</button>
+
+            <div class="sec-title" style="font-size:13px; margin-top:16px">Steps</div>
+            <div class="sec-hint">Each step runs one tool. In arguments use <code>{input}</code> values and <code>{vin}</code> / <code>{campaign}</code> captured by earlier steps.</div>
+            <div id="feSteps" style="margin-top:10px"></div>
+            <button class="btn btn-sm" id="feAddStep" style="margin-top:6px">+ Add step</button>
+
+            <div class="rowflex" style="margin-top:16px">
+              <button class="btn-primary" id="feSave">Save flow</button>
+              <button class="btn" id="feCancel">Cancel</button>
+              <span class="formmsg" id="feMsg" style="margin:0"></span>
+            </div>
+          </div>
         </section>
 
         <!-- ===== DATA SOURCES (mcp) ===== -->
@@ -1109,6 +1337,7 @@ INDEX_HTML = r"""<!doctype html>
     insights:    ["Insights",         "Business insights and patterns from the connected-services data lake.",       false],
     sources:     ["Data Sources",     "Connect the tools and APIs your AI agent can use.",                          false],
     models:      ["AI Models",        "Configure the AI models available to your agent.",                           false],
+    flows:       ["Process Flows",    "Configure the core process flows used by Deep Dive.",                        false],
     audit:       ["Audit Trail",      "A log of every investigation and automated run.",                            false],
   };
 
@@ -1129,6 +1358,7 @@ INDEX_HTML = r"""<!doctype html>
     if (key==="automations") loadAutomations();
     if (key==="deepdive") loadDeepDive();
     if (key==="insights") loadInsights();
+    if (key==="flows") loadFlowMgr();
     if (key==="audit") loadAudit();
   }
   document.querySelectorAll(".nav-item").forEach(n => n.addEventListener("click", () => showView(n.dataset.view)));
@@ -1399,124 +1629,58 @@ INDEX_HTML = r"""<!doctype html>
   }
   const grabCampaign = res => (res.match(/"(?:redbend_campaign_id|last_campaign_id|campaign_id)"\s*:\s*"([^"]+)"/)||[])[1] || null;
 
-  const FLOWS = [
-    { id:"bootstrap", name:"Bootstrap", icon:IC.plug,
-      desc:"How a connected vehicle comes online and gets its base services provisioned. We confirm it is a known vehicle, check it is reachable, see which services are provisioned, and check its embedded software stack.",
-      inputs:[{key:"vehicle", label:"Vehicle (VIN or owner)", placeholder:"Walid or VR7CONNECT00001", required:true}],
-      steps:[
-        { sys:"CVC", tool:"list_vehicles", what:"Resolve the vehicle and confirm it exists",
-          why:"Every flow starts from a VIN. The gateway is the registry of connected vehicles.",
-          argsFn:()=>({}), after:(ctx,res,inp)=>{ ctx.vin = firstVinFor(res, inp.vehicle); } },
-        { sys:"CVC", tool:"get_vehicle", what:"Check the car is online and reachable",
-          why:"Bootstrap needs live connectivity — energy, signal, software version, online status.",
-          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
-        { sys:"ASAP", tool:"service_states", what:"See which services are provisioned",
-          why:"Bootstrap provisions the base connected services; desired vs actual shows what is really applied.",
-          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
-        { sys:"Redbend", tool:"vehicle_software", what:"Inspect the embedded software stack",
-          why:"The car must run a current firmware/software stack; we also see available OTA updates.",
-          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
-      ] },
-    { id:"pairing", name:"Pairing", icon:IC.link,
-      desc:"How an activation request is paired to the vehicle — and how to diagnose a pairing that did not take. We find any service requested but not actually active (a drift), then open the OTA campaign that should have applied it.",
-      inputs:[{key:"vehicle", label:"Vehicle (VIN or owner)", placeholder:"Camille (has a Wi-Fi drift)", required:true}],
-      steps:[
-        { sys:"CVC", tool:"list_vehicles", what:"Resolve the vehicle",
-          why:"We need the VIN to inspect its service pairing.",
-          argsFn:()=>({}), after:(ctx,res,inp)=>{ ctx.vin = firstVinFor(res, inp.vehicle); } },
-        { sys:"ASAP", tool:"service_states", what:"Find desired vs actual — spot the drift",
-          why:"A pairing failure shows as desired ACTIVE but actual INACTIVE (in_sync=false).",
-          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null, after:(ctx,res)=>{ ctx.campaign = grabCampaign(res); } },
-        { sys:"Redbend", tool:"get_campaign", what:"Open the OTA campaign that should have paired it",
-          why:"The campaign trace shows exactly where pairing failed (e.g. download interrupted).",
-          argsFn:ctx=> ctx.campaign? {campaign_id:ctx.campaign} : null,
-          skipNote:"No drift found — every requested service is actually active, so there is nothing to diagnose." },
-      ] },
-    { id:"activation", name:"Service Activation", icon:IC.toggle,
-      desc:"How a service is activated end to end: ASAP sets the desired state and dispatches an OTA campaign to Redbend; the actual state flips only once the campaign reaches the car.",
-      inputs:[
-        {key:"vehicle", label:"Vehicle (VIN or owner)", placeholder:"Walid", required:true},
-        {key:"service", label:"Service code", placeholder:"REMOTE_CLIMATE", default:"REMOTE_CLIMATE", required:true}],
-      steps:[
-        { sys:"CVC", tool:"list_vehicles", what:"Resolve the vehicle",
-          why:"Activation acts on a VIN.", argsFn:()=>({}),
-          after:(ctx,res,inp)=>{ ctx.vin = firstVinFor(res, inp.vehicle); } },
-        { sys:"CVC", tool:"get_vehicle", what:"Confirm the car is online before acting",
-          why:"You should not push a command to a car that is not connected.",
-          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
-        { sys:"ASAP", tool:"activate_service", what:"Set desired ACTIVE and dispatch to Redbend",
-          why:"ASAP is the control plane: it records the desired state and orchestrates the OTA campaign.",
-          argsFn:(ctx,inp)=> ctx.vin? {vin:ctx.vin, service_code:(inp.service||"REMOTE_CLIMATE")} : null,
-          after:(ctx,res)=>{ ctx.campaign = grabCampaign(res); } },
-        { sys:"Redbend", tool:"get_campaign", what:"See the OTA campaign that applied it",
-          why:"Redbend is the data plane — it actually delivered the activation to the vehicle.",
-          argsFn:ctx=> ctx.campaign? {campaign_id:ctx.campaign} : null },
-        { sys:"ASAP", tool:"service_states", what:"Confirm actual now matches desired",
-          why:"After a successful campaign the service is in sync (desired = actual = ACTIVE).",
-          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
-      ] },
-    { id:"fota", name:"FOTA / SOTA", icon:IC.chip,
-      desc:"How an over-the-air firmware/software update is delivered: read the installed stack and available packages, launch the campaign, then verify the install bumped the module version.",
-      inputs:[
-        {key:"vehicle", label:"Vehicle (VIN or owner)", placeholder:"Walid", required:true},
-        {key:"package", label:"Package", placeholder:"FW_TCU_2025_06", default:"FW_TCU_2025_06", required:true}],
-      steps:[
-        { sys:"CVC", tool:"list_vehicles", what:"Resolve the vehicle", why:"Updates target a VIN.",
-          argsFn:()=>({}), after:(ctx,res,inp)=>{ ctx.vin = firstVinFor(res, inp.vehicle); } },
-        { sys:"Redbend", tool:"vehicle_software", what:"Read installed versions + available updates",
-          why:"You install against the current stack and only what is actually available.",
-          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
-        { sys:"Redbend", tool:"create_campaign", what:"Launch the FOTA campaign",
-          why:"Redbend downloads, verifies, installs and activates the package on the car.",
-          argsFn:(ctx,inp)=> ctx.vin? {vin:ctx.vin, type:"FOTA", target:(inp.package||"FW_TCU_2025_06")} : null,
-          after:(ctx,res)=>{ ctx.campaign = grabCampaign(res); } },
-        { sys:"Redbend", tool:"vehicle_software", what:"Verify the module version was bumped",
-          why:"A successful FOTA shows up as a new version on the targeted module.",
-          argsFn:ctx=> ctx.vin? {vin:ctx.vin} : null },
-      ] },
-    { id:"analytics", name:"Fleet Analytics", icon:IC.chart,
-      desc:"How the big picture is built from the data lake: fleet-wide usage, the most-used applications, and the anomalies that tie back to per-vehicle issues. This flow is fleet-wide and needs no VIN.",
-      inputs:[],
-      steps:[
-        { sys:"Data Lake", tool:"service_usage", what:"Fleet-wide usage summary",
-          why:"Scale of data, monthly active vehicles, total sessions and data volume.", argsFn:()=>({period:"30d"}) },
-        { sys:"Data Lake", tool:"top_applications", what:"Most-used applications + growth",
-          why:"Which connected services drive usage and which are growing or declining.", argsFn:()=>({limit:5}) },
-        { sys:"Data Lake", tool:"anomalies", what:"Flagged anomalies across the fleet",
-          why:"The macro signals that often trace back to a per-vehicle drift (e.g. Wi-Fi activations).", argsFn:()=>({}) },
-      ] },
-  ];
+  let flows = [];   // declarative process flows, loaded from /api/flows
 
-  let currentFlow = null, flowBuilt = false;
+  let currentFlow = null;
+  const FLOW_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>';
+  const firstInputKey = f => (f.inputs && f.inputs[0]) ? f.inputs[0].key : null;
   function buildFlowTabs(){
-    if (flowBuilt) return; flowBuilt = true;
-    $("#flowTabs").innerHTML = FLOWS.map(f =>
-      '<button class="flowtab" data-id="'+f.id+'">'+f.icon+esc(f.name)+'</button>').join("");
+    $("#flowTabs").innerHTML = flows.map(f =>
+      '<button class="flowtab" data-id="'+esc(f.id)+'">'+FLOW_ICON+esc(f.name)+'</button>').join("");
     document.querySelectorAll("#flowTabs .flowtab").forEach(t => t.addEventListener("click", () => selectFlow(t.dataset.id)));
+  }
+  // Build a step's tool arguments from its templates. Returns null (skip) when a
+  // referenced capture value ({vin}/{campaign}) has not been produced yet.
+  function resolveArgs(stepArgs, inp, ctx){
+    const out = {}; let missing = false;
+    for (const k in (stepArgs||{})){
+      const v = String(stepArgs[k]).replace(/\{(\w+)\}/g, (m, name) => {
+        if (name==="vin" || name==="campaign"){ if (ctx[name]==null || ctx[name]===""){ missing=true; return m; } return ctx[name]; }
+        return (inp[name]!=null ? inp[name] : "");
+      });
+      out[k] = /^-?\d+$/.test(v) ? Number(v) : v;
+    }
+    return missing ? null : out;
+  }
+  function applyCapture(step, ctx, res, inp, fkey){
+    for (const c of (step.capture||[])){
+      if (c==="vin") ctx.vin = firstVinFor(res, fkey ? inp[fkey] : "");
+      else if (c==="campaign") ctx.campaign = grabCampaign(res);
+    }
   }
   function stepCardHtml(s, idx, state, args, res){
     const cls = state==="skip" ? "step skip" : (state==="pending" ? "step pending" : "step");
     const stTxt = state==="done" ? '<span class="dot ok"></span>completed' : state==="skip" ? 'skipped' : state==="run" ? '<span class="spin" style="width:13px;height:13px"></span>running' : 'not run';
     return '<div class="flowconn"></div><div class="'+cls+'"><div class="sh"><span class="num">'+(idx+1)+'</span>'+
-      '<span class="sysbadge '+(SYS[s.sys]||"")+'">'+esc(s.sys)+'</span><span class="tool">'+esc(s.tool)+'</span>'+
+      '<span class="sysbadge '+(SYS[s.system]||"")+'">'+esc(s.system||"Tool")+'</span><span class="tool">'+esc(s.tool)+'</span>'+
       '<span class="st">'+stTxt+'</span></div><div class="body"><div class="what">'+esc(s.what)+'</div><div class="why">'+esc(s.why)+'</div>'+
       (args!=null?'<div class="args">arguments: '+esc(JSON.stringify(args))+'</div>':'')+
-      (state==="skip"?'<div class="why" style="margin-top:8px;color:var(--warning)">'+esc(s.skipNote||"Skipped — a prerequisite from a previous step was missing.")+'</div>':'')+
+      (state==="skip"?'<div class="why" style="margin-top:8px;color:var(--warning)">'+esc(s.skip_note||"Skipped — a prerequisite from a previous step was missing.")+'</div>':'')+
       (res!=null?'<div class="res">'+esc(String(res).slice(0,1400))+'</div>':'')+'</div></div>';
   }
   function renderFlow(states){
     const f = currentFlow;
     $("#flowSteps").innerHTML = '<div class="panel" style="padding:18px"><div class="sec-title">'+esc(f.name)+' flow</div>'+
-      '<div class="sec-hint">'+esc(f.desc)+'</div><div style="margin-top:6px">'+
-      f.steps.map((s,i)=> stepCardHtml(s, i, (states&&states[i]&&states[i].state)||"idle", states&&states[i]?states[i].args:null, states&&states[i]?states[i].res:null)).join("")+
+      '<div class="sec-hint">'+esc(f.description||"")+'</div><div style="margin-top:6px">'+
+      (f.steps||[]).map((s,i)=> stepCardHtml(s, i, (states&&states[i]&&states[i].state)||"idle", states&&states[i]?states[i].args:null, states&&states[i]?states[i].res:null)).join("")+
       '</div></div>';
   }
   function selectFlow(id){
-    currentFlow = FLOWS.find(f=>f.id===id); if(!currentFlow) return;
+    currentFlow = flows.find(f=>f.id===id); if(!currentFlow) return;
     document.querySelectorAll("#flowTabs .flowtab").forEach(t=>t.classList.toggle("sel", t.dataset.id===id));
-    $("#flowInputs").innerHTML = currentFlow.inputs.length ? currentFlow.inputs.map(p =>
-      '<div class="field"><label>'+esc(p.label)+(p.required?' *':'')+'</label><input class="inp" data-k="'+p.key+'" placeholder="'+esc(p.placeholder||"")+'" value="'+esc(p.default||"")+'" /></div>').join("")
-      : '<div class="sec-hint" style="margin:0">This flow is fleet-wide — no vehicle needed.</div>';
+    $("#flowInputs").innerHTML = (currentFlow.inputs||[]).length ? currentFlow.inputs.map(p =>
+      '<div class="field"><label>'+esc(p.label||p.key)+(p.required?' *':'')+'</label><input class="inp" data-k="'+esc(p.key)+'" placeholder="'+esc(p.placeholder||"")+'" value="'+esc(p.default||"")+'" /></div>').join("")
+      : '<div class="sec-hint" style="margin:0">This flow is fleet-wide — no inputs needed.</div>';
     $("#flowSummary").textContent = "";
     renderFlow(null);
   }
@@ -1524,20 +1688,20 @@ INDEX_HTML = r"""<!doctype html>
   $("#flowReset").addEventListener("click", () => { if(currentFlow){ selectFlow(currentFlow.id); } });
   $("#flowRun").addEventListener("click", async () => {
     if (!currentFlow) return;
-    const inp = flowInputs();
-    for (const p of currentFlow.inputs){ if (p.required && !inp[p.key]){ $("#flowSummary").textContent = p.label+" is required."; return; } }
+    const inp = flowInputs(), fkey = firstInputKey(currentFlow);
+    for (const p of (currentFlow.inputs||[])){ if (p.required && !inp[p.key]){ $("#flowSummary").textContent = (p.label||p.key)+" is required."; return; } }
     const btn=$("#flowRun"); btn.disabled=true; btn.textContent="Running…"; $("#flowSummary").textContent="";
-    const ctx = {}; const states = currentFlow.steps.map(()=>({state:"idle", args:null, res:null}));
+    const ctx = {}; const steps = currentFlow.steps||[]; const states = steps.map(()=>({state:"idle", args:null, res:null}));
     let ran=0, skipped=0;
-    for (let i=0;i<currentFlow.steps.length;i++){
-      const s = currentFlow.steps[i];
-      let args; try { args = s.argsFn(ctx, inp); } catch(e){ args = null; }
+    for (let i=0;i<steps.length;i++){
+      const s = steps[i];
+      const args = resolveArgs(s.args, inp, ctx);
       if (args===null){ states[i]={state:"skip", args:null, res:null}; skipped++; renderFlow(states); continue; }
       states[i]={state:"run", args, res:null}; renderFlow(states);
       try{
         const d = await api("POST","/api/tool",{ name:s.tool, arguments:args });
         states[i]={state:"done", args, res:d.result};
-        if (s.after){ try{ s.after(ctx, String(d.result||""), inp); }catch(e){} }
+        applyCapture(s, ctx, String(d.result||""), inp, fkey);
         ran++;
       }catch(e){ states[i]={state:"done", args, res:"Error: "+e.message}; }
       renderFlow(states);
@@ -1545,7 +1709,121 @@ INDEX_HTML = r"""<!doctype html>
     $("#flowSummary").textContent = "Flow complete — "+ran+" tool"+(ran===1?"":"s")+" run"+(skipped?(", "+skipped+" skipped"):"")+(ctx.vin?(" · VIN "+ctx.vin):"")+".";
     btn.disabled=false; btn.textContent="Run flow";
   });
-  function loadDeepDive(){ buildFlowTabs(); if(!currentFlow) selectFlow(FLOWS[0].id); }
+  async function loadDeepDive(){
+    try{ flows = (await api("GET","/api/flows")).flows || []; }catch(e){ flows = []; }
+    buildFlowTabs();
+    const keep = currentFlow && flows.find(f=>f.id===currentFlow.id);
+    selectFlow(keep ? currentFlow.id : (flows[0] && flows[0].id));
+  }
+
+  // ---------- process flows: configure (CRUD) ----------
+  const FLOW_SYSTEMS = ["CVC","ASAP","Redbend","Data Lake","Custom"];
+  function allToolNames(){
+    const set = new Set();
+    (info && info.servers || []).forEach(s => (s.tools||[]).forEach(t => set.add(t.name)));
+    return Array.from(set).sort();
+  }
+  async function loadFlowMgr(){
+    $("#flowEditor").style.display = "none";
+    try{ flows = (await api("GET","/api/flows")).flows || []; }catch(e){ flows = []; }
+    const box = $("#flowMgrList");
+    box.innerHTML = flows.length ? flows.map(f =>
+      '<div class="flowmgr"><div class="top"><span class="nm">'+esc(f.name)+'</span>'+
+      '<span class="badge acc">'+(f.steps||[]).length+' steps</span>'+
+      '<span class="badge">'+(f.inputs||[]).length+' inputs</span>'+
+      '<span class="acts"><button class="btn btn-sm" onclick="editFlow(\''+esc(f.id)+'\')">Edit</button>'+
+      '<button class="btn btn-sm btn-danger" onclick="delFlow(\''+esc(f.id)+'\')">Delete</button></span></div>'+
+      '<div class="meta">'+esc(f.description||"")+'</div>'+
+      '<div class="meta" style="margin-top:6px">'+(f.steps||[]).map(s=>esc((s.system||"")+":"+s.tool)).join("  →  ")+'</div></div>'
+    ).join("") : '<div class="evi-empty">No flows. Click “New flow”.</div>';
+  }
+  // editor row builders
+  function inputRow(d){ d=d||{};
+    const r = el("div","firow");
+    r.innerHTML = '<input class="inp" data-f="key" placeholder="key (e.g. vehicle)" value="'+esc(d.key||"")+'" style="max-width:150px" />'+
+      '<input class="inp" data-f="label" placeholder="label" value="'+esc(d.label||"")+'" />'+
+      '<input class="inp" data-f="default" placeholder="default" value="'+esc(d.default||"")+'" style="max-width:140px" />'+
+      '<label class="chk"><input type="checkbox" data-f="required" '+(d.required?"checked":"")+' /> required</label>'+
+      '<button class="btn btn-sm btn-danger" type="button">✕</button>';
+    r.querySelector("button").addEventListener("click", ()=> r.remove());
+    return r;
+  }
+  function argsToText(a){ a=a||{}; return Object.keys(a).map(k=> k+" = "+a[k]).join("\n"); }
+  function parseArgs(text){ const o={}; (text||"").split("\n").forEach(l=>{ const i=l.indexOf("="); if(i>0){ const k=l.slice(0,i).trim(); const v=l.slice(i+1).trim(); if(k) o[k]=v; } }); return o; }
+  function stepRow(d){ d=d||{};
+    const tools = allToolNames();
+    const r = el("div","festep");
+    const sysOpts = FLOW_SYSTEMS.map(s=>'<option'+(s===d.system?" selected":"")+'>'+s+'</option>').join("");
+    const toolOpts = '<option value="">— tool —</option>'+tools.map(t=>'<option'+(t===d.tool?" selected":"")+'>'+esc(t)+'</option>').join("")+
+      ((d.tool && !tools.includes(d.tool))?'<option selected>'+esc(d.tool)+'</option>':'');
+    r.innerHTML =
+      '<div class="sn"><span class="num"></span><b style="font-size:12.5px">Step</b><span class="acts">'+
+      '<button class="btn btn-sm" type="button" data-a="up">↑</button><button class="btn btn-sm" type="button" data-a="down">↓</button>'+
+      '<button class="btn btn-sm btn-danger" type="button" data-a="del">✕</button></span></div>'+
+      '<div class="grid2"><select class="inp" data-f="system">'+sysOpts+'</select><select class="inp" data-f="tool">'+toolOpts+'</select></div>'+
+      '<input class="inp" data-f="what" placeholder="What this step does" value="'+esc(d.what||"")+'" style="margin-bottom:8px" />'+
+      '<input class="inp" data-f="why" placeholder="Why it matters" value="'+esc(d.why||"")+'" style="margin-bottom:8px" />'+
+      '<textarea class="inp" data-f="args" placeholder="arguments, one per line:  vin = {vin}">'+esc(argsToText(d.args))+'</textarea>'+
+      '<div style="margin-top:8px"><label class="chk"><input type="checkbox" data-f="cap_vin" '+((d.capture||[]).includes("vin")?"checked":"")+' /> capture VIN</label>'+
+      '<label class="chk"><input type="checkbox" data-f="cap_campaign" '+((d.capture||[]).includes("campaign")?"checked":"")+' /> capture campaign id</label></div>'+
+      '<input class="inp" data-f="skip_note" placeholder="skip note (shown if a prerequisite is missing)" value="'+esc(d.skip_note||"")+'" style="margin-top:8px" />';
+    r.querySelector('[data-a="del"]').addEventListener("click", ()=>{ r.remove(); renumberSteps(); });
+    r.querySelector('[data-a="up"]').addEventListener("click", ()=>{ const p=r.previousElementSibling; if(p) r.parentNode.insertBefore(r,p); renumberSteps(); });
+    r.querySelector('[data-a="down"]').addEventListener("click", ()=>{ const n=r.nextElementSibling; if(n) r.parentNode.insertBefore(n,r); renumberSteps(); });
+    return r;
+  }
+  function renumberSteps(){ document.querySelectorAll("#feSteps .festep .num").forEach((n,i)=> n.textContent=i+1); }
+  function openEditor(flow){
+    $("#flowEdTitle").textContent = flow ? ("Edit "+flow.name) : "New flow";
+    $("#feName").value = flow? flow.name : "";
+    $("#feDesc").value = flow? (flow.description||"") : "";
+    $("#feInputs").innerHTML = ""; ((flow&&flow.inputs)||[]).forEach(p=> $("#feInputs").appendChild(inputRow(p)));
+    $("#feSteps").innerHTML = ""; ((flow&&flow.steps)||[{}]).forEach(s=> $("#feSteps").appendChild(stepRow(s))); renumberSteps();
+    $("#flowEditor").dataset.editId = flow? flow.id : "";
+    $("#feMsg").textContent = "";
+    $("#flowEditor").style.display = "";
+    $("#flowEditor").scrollIntoView({behavior:"smooth", block:"start"});
+  }
+  function collectFlow(){
+    const inputs = [];
+    document.querySelectorAll("#feInputs .firow").forEach(r=>{
+      const key = r.querySelector('[data-f="key"]').value.trim(); if(!key) return;
+      inputs.push({ key, label:r.querySelector('[data-f="label"]').value.trim()||key,
+        default:r.querySelector('[data-f="default"]').value.trim(),
+        required:r.querySelector('[data-f="required"]').checked, placeholder:"" });
+    });
+    const steps = [];
+    document.querySelectorAll("#feSteps .festep").forEach(r=>{
+      const tool = r.querySelector('[data-f="tool"]').value.trim(); if(!tool) return;
+      const cap = []; if(r.querySelector('[data-f="cap_vin"]').checked) cap.push("vin"); if(r.querySelector('[data-f="cap_campaign"]').checked) cap.push("campaign");
+      steps.push({ system:r.querySelector('[data-f="system"]').value, tool,
+        what:r.querySelector('[data-f="what"]').value.trim(), why:r.querySelector('[data-f="why"]').value.trim(),
+        args:parseArgs(r.querySelector('[data-f="args"]').value), capture:cap,
+        skip_note:r.querySelector('[data-f="skip_note"]').value.trim()||null });
+    });
+    return { name:$("#feName").value.trim(), description:$("#feDesc").value.trim(), inputs, steps };
+  }
+  window.editFlow = (id)=>{ const f=flows.find(x=>x.id===id); if(f) openEditor(f); };
+  window.delFlow = async (id)=>{ try{ await api("DELETE","/api/flows/"+encodeURIComponent(id)); }catch(e){ alert(e.message); } loadFlowMgr(); };
+  $("#flowNew").addEventListener("click", ()=> openEditor(null));
+  $("#feCancel").addEventListener("click", ()=>{ $("#flowEditor").style.display="none"; });
+  $("#feAddInput").addEventListener("click", ()=> $("#feInputs").appendChild(inputRow({})));
+  $("#feAddStep").addEventListener("click", ()=>{ $("#feSteps").appendChild(stepRow({})); renumberSteps(); });
+  $("#feSave").addEventListener("click", async ()=>{
+    const flow = collectFlow();
+    if(!flow.name){ $("#feMsg").textContent="Name is required."; return; }
+    if(!flow.steps.length){ $("#feMsg").textContent="Add at least one step with a tool."; return; }
+    const id = $("#flowEditor").dataset.editId;
+    try{
+      if(id) await api("PUT","/api/flows/"+encodeURIComponent(id), flow);
+      else await api("POST","/api/flows", flow);
+      $("#flowEditor").style.display="none"; loadFlowMgr();
+    }catch(e){ $("#feMsg").textContent="Error: "+e.message; }
+  });
+  $("#flowResetDefaults").addEventListener("click", async ()=>{
+    if(!confirm("Reset all process flows to the built-in defaults?")) return;
+    try{ await api("POST","/api/flows/reset"); }catch(e){} loadFlowMgr();
+  });
 
   // ---------- insights: business analytics from the data lake ----------
   function parseObjects(text){

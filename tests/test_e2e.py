@@ -385,6 +385,21 @@ def test_web_ui_endpoints(services, tmp_path_factory):
         bad = httpx.post(f"{base}/api/tool",
                          json={"name": "nope_tool", "arguments": {}}, timeout=30).json()
         assert bad["ok"] is False
+
+        # configurable process flows (Deep Dive): defaults + CRUD
+        flows = httpx.get(f"{base}/api/flows").json()["flows"]
+        assert {f["id"] for f in flows} >= {"bootstrap", "pairing", "activation", "fota", "analytics"}
+        created = httpx.post(f"{base}/api/flows", json={
+            "name": "Quick Check", "description": "demo",
+            "inputs": [{"key": "vehicle", "label": "Vehicle", "required": True}],
+            "steps": [{"system": "CVC", "tool": "get_vehicle", "what": "state", "why": "x",
+                       "args": {"vin": "{vin}"}, "capture": []}],
+        }).json()
+        assert created["id"] == "quick-check" and len(created["steps"]) == 1
+        assert any(f["id"] == "quick-check" for f in httpx.get(f"{base}/api/flows").json()["flows"])
+        assert httpx.request("DELETE", f"{base}/api/flows/quick-check").json()["removed"] == "quick-check"
+        # reset restores the defaults
+        assert len(httpx.post(f"{base}/api/flows/reset").json()["flows"]) == 5
         assert info["tool_count"] == len(all_tools)
         assert any(l["id"] == "mock" for l in info["llms"])
 

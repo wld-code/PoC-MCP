@@ -180,12 +180,17 @@ to the user) with a sidebar of seven views:
   runtime; tools join the agent's toolbox instantly).
 - **AI Models** — **CRUD** the LLM configurations (kind, key, endpoint, model;
   set a default).
+- **Process Flows** — **CRUD** the Deep Dive flows themselves: build a process
+  from ordered tool steps (system, tool, what/why, argument templates with
+  `{input}`/`{vin}`/`{campaign}`, and what to capture) — no code. New flows appear
+  in Deep Dive immediately.
 - **Audit Trail** — a log of every investigation and automated run.
 
 Backend endpoints: `GET /api/info`, `GET /api/tools`, `POST /api/tool` (run one
 tool — used by Deep Dive), `POST /api/chat`,
 `GET|POST|PUT|DELETE /api/mcp/servers[/{id}]` (data-source CRUD),
 `GET|POST|PUT|DELETE /api/llms[/{id}]` + `PUT /api/llms/{id}/default` (model CRUD),
+`GET|POST|PUT|DELETE /api/flows[/{id}]` + `POST /api/flows/reset` (process-flow CRUD),
 `POST /api/headless/run`, `GET /api/headless/runs`,
 `POST|GET|DELETE /api/headless/triggers`.
 
