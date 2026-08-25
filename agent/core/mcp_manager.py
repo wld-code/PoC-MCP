@@ -19,7 +19,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from mcp_client import MCPClient
+from core.mcp_client import MCPClient
 
 
 def _slug(url: str) -> str:

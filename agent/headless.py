@@ -22,9 +22,9 @@ import json
 import os
 import sys
 
-from mcp_client import MultiMCPClient
-from providers import get_provider
-from servers import MCP_SERVER_URLS
+from core.mcp_client import MultiMCPClient
+from core.providers import get_provider
+from core.servers import MCP_SERVER_URLS
 
 
 async def ask(question: str, as_json: bool) -> int:

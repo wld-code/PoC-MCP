@@ -1,0 +1,108 @@
+:root {
+  --navy: #0c1a2e;
+  --navy-2: #13233d;
+  --ice: #e2e7ef;
+  --offwhite: #f7f9fc;
+  --white: #ffffff;
+  --slate: #5a6b82;
+  --muted: #8a98ad;
+  --blue: #1456d6;
+  --blue-light: #7fa0e8;
+  --danger: #c0392b;
+  --ok: #1f8a52;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+  background: var(--offwhite);
+  color: var(--navy);
+}
+
+a { color: var(--blue); }
+
+.app-shell { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  background: var(--navy);
+  color: var(--ice);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 0;
+}
+.sidebar .brand { padding: 0 20px 20px; font-weight: 700; letter-spacing: 0.04em; font-size: 15px; }
+.sidebar .brand small { display: block; color: var(--blue-light); font-weight: 400; font-size: 11px; margin-top: 4px; }
+.sidebar nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.sidebar nav a {
+  color: var(--ice); text-decoration: none; padding: 10px 20px; font-size: 14px;
+  border-left: 3px solid transparent;
+}
+.sidebar nav a.active { background: rgba(255,255,255,0.06); border-left-color: var(--blue-light); color: #fff; }
+.sidebar nav a:hover { background: rgba(255,255,255,0.04); }
+.sidebar .role-badge {
+  margin: 12px 20px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.sidebar .logout { margin: 12px 20px 0; background: none; border: 1px solid #24354f; color: var(--ice);
+  padding: 8px 12px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
+
+.content { flex: 1; padding: 32px 40px; max-width: 1200px; }
+.content h1 { font-size: 26px; margin: 0 0 4px; }
+.content .subtitle { color: var(--slate); margin: 0 0 28px; font-size: 14px; }
+
+.card {
+  background: var(--white); border: 1px solid var(--ice); border-radius: var(--radius);
+  padding: 20px; margin-bottom: 16px;
+}
+.card h3 { margin: 0 0 10px; font-size: 15px; }
+.grid { display: grid; gap: 16px; }
+.grid-2 { grid-template-columns: 1fr 1fr; }
+.grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+.btn {
+  background: var(--blue); color: #fff; border: none; border-radius: 8px; padding: 9px 16px;
+  font-size: 14px; cursor: pointer;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.secondary { background: var(--offwhite); color: var(--navy); border: 1px solid var(--ice); }
+.btn.danger { background: var(--danger); }
+.btn.sm { padding: 5px 10px; font-size: 12px; }
+
+input, select, textarea {
+  border: 1px solid var(--ice); border-radius: 8px; padding: 8px 10px; font-size: 14px;
+  width: 100%; font-family: inherit;
+}
+label { display: block; font-size: 12px; color: var(--slate); margin-bottom: 4px; margin-top: 10px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--ice); }
+th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
+
+.pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.pill.role-admin { background: var(--navy); color: #fff; }
+.pill.role-operator { background: var(--blue); color: #fff; }
+.pill.role-viewer { background: var(--ice); color: var(--navy); }
+.pill.ok { background: #e5f5ec; color: var(--ok); }
+.pill.error { background: #fbe9e7; color: var(--danger); }
+
+.evidence { background: var(--offwhite); border: 1px solid var(--ice); border-radius: 8px; padding: 10px 14px; margin-top: 8px; font-size: 12px; }
+.evidence code { color: var(--blue); }
+
+.msg { padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
+.msg.error { background: #fbe9e7; color: var(--danger); }
+.msg.ok { background: #e5f5ec; color: var(--ok); }
+
+.login-page {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--navy);
+}
+.login-box { background: #fff; padding: 40px; border-radius: 14px; width: 360px; }
+.login-box h1 { font-size: 20px; margin: 0 0 4px; }
+.login-box .subtitle { color: var(--slate); font-size: 13px; margin: 0 0 20px; }
+
+.chat-answer { white-space: pre-wrap; line-height: 1.5; font-size: 14px; }
+.empty { color: var(--muted); font-size: 13px; padding: 20px 0; text-align: center; }
