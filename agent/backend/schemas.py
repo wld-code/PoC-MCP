@@ -109,6 +109,7 @@ class ScheduleOut(BaseModel):
     interval_seconds: int | None
     active: bool
     created_at: datetime
+    next_run_time: datetime | None = None  # live from APScheduler, not a DB column
 
     model_config = {"from_attributes": True}
 

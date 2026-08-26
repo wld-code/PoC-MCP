@@ -83,8 +83,9 @@ single source of truth.
   [Application architecture](#application-architecture).
 - **Persistent scheduler** — automations are APScheduler jobs backed by
   Postgres; they survive a backend restart, unlike a naive in-memory timer.
-- **Live CRUD in the UI** — manage **MCP servers** and **LLM configs** from the
-  browser (add/edit/remove), no restart.
+- **Live CRUD in the UI** — manage **MCP servers**, **LLM configs**, and **Deep
+  Dive process flows** (create/edit/delete/reorder steps, any flow including
+  the built-ins) from the browser, no restart.
 - **Three ways to run the agent** — `headless.py` (automation/CI/Jobs, no
   server or DB needed), the backend's `POST /api/agents/run` (headless over
   HTTP, authenticated), and the React web app (interactive, see below).
@@ -215,29 +216,36 @@ Automations used to be a per-request `asyncio.sleep` loop — gone on restart.
 They're now [APScheduler](https://apscheduler.readthedocs.io/) jobs backed by
 Postgres (`agent/backend/services/scheduler.py`): create one with a cron
 expression or a plain interval, and it survives a backend restart because the
-job itself — not just its description — is persisted. Manage them from the
+job itself — not just its description — is persisted. `GET /api/schedules`
+reads `next_run_time` live off the APScheduler job (not a DB column) so the
+UI can show a countdown; it's `null` while paused. Manage them from the
 **Automations** page or `POST/GET/DELETE /api/schedules`,
-`POST /api/schedules/{id}/pause|resume`.
+`POST /api/schedules/{id}/pause|resume`, `GET /api/schedules/{id}/runs`.
 
-### The web app — "AI Operations Control"
+### The web app — "AI Control Tower"
 
 A sidebar SPA (no internal MCP terminology surfaced to the user):
 
 - **Mission Control** — the interactive agent. Ask a question; get an *Executive
   Answer* plus an **Evidence** panel listing the tools the agent used.
 - **Automations** — create/pause/resume/delete persistent schedules (cron or
-  interval), see their run history.
+  interval); a live countdown to the next run, and each schedule's run history
+  (answer + evidence) inline, updating automatically.
 - **Deep Dive** — understand each **core process flow** end to end (Bootstrap,
   Pairing, Service Activation, FOTA/SOTA, Fleet Analytics): the ordered steps,
   which system/tool each uses and *why* — then **run the flow for a VIN** and see
-  each tool's real result step by step.
+  each tool's real result step by step, optionally with an **LLM explanation**
+  of what happened next to the results (*Run flow with AI*).
 - **Insights** — **business insights** auto-derived from the data lake, plus a
   one-click LLM-generated executive brief.
 - **Data Sources** *(admin)* — **CRUD** the connected MCP servers (add/edit/remove
   at runtime; tools join the toolbox instantly).
 - **AI Models** — everyone can see the registry (name/kind/model, never the
   key); **admin** can add/edit/delete and set the default.
-- **Process Flows** — **CRUD** the Deep Dive flows (operator+).
+- **Process Flows** — a visual editor (operator+) for the Deep Dive catalogue:
+  create/edit/delete any flow (including the built-ins), reorder steps on a
+  color-coded timeline, and pick tools from the live MCP registry with
+  inline validation.
 - **Audit Trail** *(operator+)* — every action and every agent run, attributed.
 - **Users** *(admin)* — create accounts, assign roles, disable/delete.
 
