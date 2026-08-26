@@ -9,6 +9,45 @@ function fillTemplate(tpl: string, values: Record<string, string>): string {
   return tpl.replace(/\{(\w+)\}/g, (_, k) => values[k] ?? "");
 }
 
+// The fake APIs return back-to-back pretty-printed JSON objects (no
+// enclosing array, no commas) rather than one JSON document — split on
+// balanced braces and parse each individually.
+function parseConcatenatedJson(text: string): any[] {
+  const out: any[] = [];
+  let depth = 0, start = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") { if (depth === 0) start = i; depth++; }
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        try { out.push(JSON.parse(text.slice(start, i + 1))); } catch { /* skip malformed chunk */ }
+        start = -1;
+      }
+    }
+  }
+  return out;
+}
+
+// list_vehicles takes no filter — it always returns the whole fleet — so
+// resolving "vin" by grabbing the first "vin" key in the result would always
+// pick the same (first) vehicle regardless of what the user typed. Match the
+// typed input(s) against vin/owner instead, falling back to the first entry.
+function resolveVin(resultText: string, queries: string[]): string | undefined {
+  const vehicles = parseConcatenatedJson(resultText).filter((o) => typeof o?.vin === "string");
+  if (!vehicles.length) return undefined;
+  const cleaned = queries.map((q) => (q || "").trim().toLowerCase()).filter(Boolean);
+  for (const q of cleaned) {
+    const exact = vehicles.find((v) => v.vin.toLowerCase() === q);
+    if (exact) return exact.vin;
+  }
+  for (const q of cleaned) {
+    const byOwner = vehicles.find((v) => typeof v.owner === "string" && v.owner.toLowerCase().includes(q));
+    if (byOwner) return byOwner.vin;
+  }
+  return vehicles[0].vin;
+}
+
 export default function DeepDive() {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [selected, setSelected] = useState<Flow | null>(null);
@@ -45,8 +84,16 @@ export default function DeepDive() {
         const res = await api.post("/api/tool", { name: step.tool, arguments: args });
         out.push({ step, result: res.result, ok: res.ok });
         for (const cap of step.capture) {
-          const m = new RegExp(`"${cap}"\\s*:\\s*"([^"]+)"`).exec(res.result) || new RegExp(`"${cap}_id"\\s*:\\s*"([^"]+)"`).exec(res.result);
-          if (m) captured[cap] = m[1];
+          let value: string | undefined;
+          if (step.tool === "list_vehicles" && cap === "vin") {
+            value = resolveVin(res.result, Object.values(values));
+          } else {
+            // Match "vin", "campaign_id", or "last_campaign_id" alike — API
+            // responses don't always use the bare key the flow asks to
+            // capture (e.g. drift is reported under last_campaign_id).
+            value = new RegExp(`"(?:last_)?${cap}(?:_id)?"\\s*:\\s*"([^"]+)"`).exec(res.result)?.[1];
+          }
+          if (value) captured[cap] = value;
         }
       } catch (err: any) {
         out.push({ step, result: err.message, ok: false });
