@@ -17,15 +17,27 @@ from backend.services.util import resolve_llm
 router = APIRouter(prefix="/api/schedules", tags=["schedules"])
 
 
+def _view(s: Schedule) -> ScheduleOut:
+    """ScheduleOut plus next_run_time read live off the APScheduler job —
+    there's no DB column for it, it moves every time the job fires."""
+    job = sched_svc.scheduler.get_job(str(s.id))
+    return ScheduleOut(
+        id=s.id, label=s.label, question=s.question, llm_id=s.llm_id, model=s.model,
+        cron_expression=s.cron_expression, interval_seconds=s.interval_seconds,
+        active=s.active, created_at=s.created_at,
+        next_run_time=job.next_run_time if job else None,
+    )
+
+
 @router.get("", response_model=list[ScheduleOut])
-async def list_schedules(db: AsyncSession = Depends(get_db), _=Depends(require_role("viewer"))) -> list[Schedule]:
+async def list_schedules(db: AsyncSession = Depends(get_db), _=Depends(require_role("viewer"))) -> list[ScheduleOut]:
     result = await db.execute(select(Schedule).order_by(Schedule.created_at.desc()))
-    return list(result.scalars())
+    return [_view(s) for s in result.scalars()]
 
 
 @router.post("", response_model=ScheduleOut, status_code=201)
 async def create_schedule(body: ScheduleIn, db: AsyncSession = Depends(get_db),
-                           user=Depends(require_role("operator"))) -> Schedule:
+                           user=Depends(require_role("operator"))) -> ScheduleOut:
     if not body.question.strip():
         raise HTTPException(400, "question is required")
     if bool(body.cron_expression) == bool(body.interval_seconds):
@@ -48,12 +60,12 @@ async def create_schedule(body: ScheduleIn, db: AsyncSession = Depends(get_db),
     await record_audit(db, user.id, "schedule.create", "schedule", schedule.id,
                         {"question": schedule.question, "cron": schedule.cron_expression,
                          "interval": schedule.interval_seconds})
-    return schedule
+    return _view(schedule)
 
 
 @router.post("/{sid}/pause", response_model=ScheduleOut)
 async def pause_schedule(sid: int, db: AsyncSession = Depends(get_db),
-                          user=Depends(require_role("operator"))) -> Schedule:
+                          user=Depends(require_role("operator"))) -> ScheduleOut:
     schedule = await db.get(Schedule, sid)
     if schedule is None:
         raise HTTPException(404, "schedule not found")
@@ -62,12 +74,12 @@ async def pause_schedule(sid: int, db: AsyncSession = Depends(get_db),
     await db.refresh(schedule)
     sched_svc.pause_job(sid)
     await record_audit(db, user.id, "schedule.pause", "schedule", sid)
-    return schedule
+    return _view(schedule)
 
 
 @router.post("/{sid}/resume", response_model=ScheduleOut)
 async def resume_schedule(sid: int, db: AsyncSession = Depends(get_db),
-                           user=Depends(require_role("operator"))) -> Schedule:
+                           user=Depends(require_role("operator"))) -> ScheduleOut:
     schedule = await db.get(Schedule, sid)
     if schedule is None:
         raise HTTPException(404, "schedule not found")
@@ -76,7 +88,7 @@ async def resume_schedule(sid: int, db: AsyncSession = Depends(get_db),
     await db.refresh(schedule)
     sched_svc.resume_job(sid)
     await record_audit(db, user.id, "schedule.resume", "schedule", sid)
-    return schedule
+    return _view(schedule)
 
 
 @router.delete("/{sid}")
