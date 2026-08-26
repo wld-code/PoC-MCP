@@ -1,9 +1,32 @@
 # Core: MCP client
 mcp==1.27.2
 
-# Web UI agent (web.py)
+# Backend API (backend/) — supersedes the old web.py
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
+python-multipart==0.0.20        # OAuth2PasswordRequestForm (login) parses form data
+email-validator==2.2.0          # pydantic EmailStr
+
+# Database (Postgres in compose/prod, SQLite in tests/dev) + migrations
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+aiosqlite==0.20.0
+psycopg2-binary==2.9.10         # sync driver — required by APScheduler's SQLAlchemyJobStore
+alembic==1.14.0
+pydantic-settings==2.7.0
+
+# Auth: Argon2 password hashing + JWT
+argon2-cffi==23.1.0
+pyjwt==2.10.1
+
+# Secrets at rest (LLM provider API keys)
+cryptography==44.0.0
+
+# Persistent scheduler (replaces the old asyncio-loop triggers)
+apscheduler==3.10.4
+
+# Rate limiting (login brute-force protection)
+slowapi==0.1.9
 
 # LLM providers — install the one(s) you use. All listed so the image is
 # provider-agnostic out of the box; trim for a slimmer build.

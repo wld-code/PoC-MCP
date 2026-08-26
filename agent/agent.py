@@ -18,9 +18,9 @@ import asyncio
 import os
 import sys
 
-from mcp_client import MultiMCPClient
-from providers import get_provider
-from servers import MCP_SERVER_URLS
+from core.mcp_client import MultiMCPClient
+from core.providers import get_provider
+from core.servers import MCP_SERVER_URLS
 
 
 async def run(one_shot: str | None) -> None:

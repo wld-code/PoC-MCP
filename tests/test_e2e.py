@@ -2,17 +2,18 @@
 
 Boots the real services as subprocesses:
 
-  - asap-api  (service orchestration)        FastAPI
-  - cvc-api   (car gateway / telemetry)       FastAPI
-  - asap-mcp  (MCP adapter over asap-api)      MCP / Streamable HTTP
-  - cvc-mcp   (MCP adapter over cvc-api)        MCP / Streamable HTTP
+  - asap-api / cvc-api / redbend-api / datalake-api    FastAPI
+  - asap-mcp / cvc-mcp / redbend-mcp / datalake-mcp     MCP / Streamable HTTP
 
 then exercises every layer:
 
-  - API HTTP endpoints (both APIs)
-  - MCP tool discovery + calls across BOTH servers via MultiMCPClient
-  - Headless agent (subprocess) using the deterministic `mock` provider
-  - UI agent (web.py) over HTTP using the `mock` provider
+  - API HTTP endpoints (all four APIs)
+  - MCP tool discovery + calls across all four servers via MultiMCPClient
+  - Headless CLI agent (subprocess) using the deterministic `mock` provider —
+    no server, no DB
+  - The backend API (agent/backend/, spawned per-test against its own
+    throwaway SQLite DB) over HTTP: auth/JWT/RBAC, chat, headless-over-HTTP,
+    MCP/LLM/flow CRUD, and a persisted schedule actually firing
   - Optional: a live LLM run, only if a provider key is present
 
 The `mock` provider means the agent tests need no API key and cost nothing.
@@ -280,7 +281,7 @@ def test_cvc_online_offline_narrative(services):
 # --------------------------------------------------------------------------- #
 def test_multi_mcp_tools_and_call(services):
     sys.path.insert(0, str(AGENT_DIR))
-    from mcp_client import MultiMCPClient
+    from core.mcp_client import MultiMCPClient
 
     async def go():
         async with MultiMCPClient(services["mcp_urls"]) as mcp:
@@ -328,24 +329,96 @@ def test_headless_agent_cross_server(services):
 
 
 # --------------------------------------------------------------------------- #
-# UI agent (web.py over HTTP, mock provider)                                   #
+# Backend API (backend/main.py over HTTP, mock provider, JWT auth + RBAC)      #
 # --------------------------------------------------------------------------- #
-def test_web_agent(services, tmp_path_factory):
-    web_port = free_port()
-    env = {**os.environ, "MCP_SERVER_URLS": services["mcp_urls"], "LLM_PROVIDER": "mock"}
+ADMIN_EMAIL = "admin@test.local"
+ADMIN_PASSWORD = "test-admin-password-12345"
+
+
+def _spawn_backend(services, tmp_path_factory, name: str, env_overrides: dict | None = None):
+    """Boots backend/main.py as a subprocess against its own throwaway SQLite
+    DB (created fresh via the lifespan's `init_models()` — no Alembic needed
+    for tests, see backend/db.py). Returns (base_url, proc); caller must
+    terminate `proc`."""
+    port = free_port()
+    db_path = tmp_path_factory.mktemp(name) / "test.db"
+    env = {
+        **os.environ,
+        "MCP_SERVER_URLS": services["mcp_urls"],
+        "LLM_PROVIDER": "mock",
+        "DATABASE_URL": f"sqlite+aiosqlite:///{db_path}",
+        "ADMIN_EMAIL": ADMIN_EMAIL,
+        "ADMIN_PASSWORD": ADMIN_PASSWORD,
+        "CORS_ORIGINS": "http://localhost:3000",
+        **(env_overrides or {}),
+    }
     proc = _spawn(
-        [sys.executable, "-m", "uvicorn", "web:app", "--port", str(web_port)],
-        AGENT_DIR, env, tmp_path_factory.mktemp("web") / "web.log",
+        [sys.executable, "-m", "uvicorn", "backend.main:app", "--port", str(port)],
+        AGENT_DIR, env, tmp_path_factory.mktemp(name + "-log") / "backend.log",
     )
+    base = f"http://127.0.0.1:{port}"
+    wait_http(f"{base}/health")
+    return base, proc
+
+
+def _login(base: str, email: str, password: str) -> str:
+    res = httpx.post(f"{base}/api/auth/login", data={"username": email, "password": password}, timeout=10)
+    assert res.status_code == 200, res.text
+    return res.json()["access_token"]
+
+
+def _auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_backend_auth_and_rbac(services, tmp_path_factory):
+    base, proc = _spawn_backend(services, tmp_path_factory, "auth")
     try:
-        base = f"http://127.0.0.1:{web_port}"
-        wait_http(f"{base}/health")
-        assert "<html" in httpx.get(base).text.lower()
-        tool_names = httpx.get(f"{base}/api/tools").json()["tools"]
+        # wrong password -> 401
+        bad = httpx.post(f"{base}/api/auth/login", data={"username": ADMIN_EMAIL, "password": "nope"})
+        assert bad.status_code == 401
+
+        admin_token = _login(base, ADMIN_EMAIL, ADMIN_PASSWORD)
+        me = httpx.get(f"{base}/api/auth/me", headers=_auth(admin_token)).json()
+        assert me["email"] == ADMIN_EMAIL and me["role"] == "admin"
+
+        # no token at all -> 401 on a protected route
+        assert httpx.get(f"{base}/api/agents/runs").status_code == 401
+
+        # admin creates a viewer; viewer can read but not hit admin-only/operator-only routes
+        created = httpx.post(f"{base}/api/users", headers=_auth(admin_token),
+                              json={"email": "viewer@example.com", "password": "viewer-password-1", "role": "viewer"})
+        assert created.status_code == 201
+        viewer_token = _login(base, "viewer@example.com", "viewer-password-1")
+
+        assert httpx.get(f"{base}/api/agents/runs", headers=_auth(viewer_token)).status_code == 200
+        assert httpx.post(f"{base}/api/mcp/servers", headers=_auth(viewer_token),
+                          json={"url": "http://127.0.0.1:9/mcp"}).status_code == 403
+        assert httpx.post(f"{base}/api/agents/run", headers=_auth(viewer_token),
+                          json={"question": "list vehicles"}).status_code == 403
+
+        # refresh cookie issues a fresh access token
+        client = httpx.Client(base_url=base)
+        client.post("/api/auth/login", data={"username": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+        assert client.post("/api/auth/refresh").status_code == 200
+        client.close()
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(5)
+        except Exception:  # noqa: BLE001
+            proc.kill()
+
+
+def test_backend_chat(services, tmp_path_factory):
+    base, proc = _spawn_backend(services, tmp_path_factory, "chat")
+    try:
+        token = _login(base, ADMIN_EMAIL, ADMIN_PASSWORD)
+        tool_names = httpx.get(f"{base}/api/tools", headers=_auth(token)).json()["tools"]
         assert "list_vehicles" in tool_names and "activate_service" in tool_names
 
         res = httpx.post(
-            f"{base}/api/chat",
+            f"{base}/api/chat", headers=_auth(token),
             json={"session_id": "t1", "message": "show the diagnostics for the first car"},
             timeout=60,
         ).json()
@@ -359,71 +432,47 @@ def test_web_agent(services, tmp_path_factory):
             proc.kill()
 
 
-def test_web_ui_endpoints(services, tmp_path_factory):
-    # Exercises the multi-tab UI backend: per-server tool grouping, the provider
-    # menu, a headless run, and a scheduled trigger (create -> list -> delete).
-    web_port = free_port()
-    env = {**os.environ, "MCP_SERVER_URLS": services["mcp_urls"], "LLM_PROVIDER": "mock"}
-    proc = _spawn(
-        [sys.executable, "-m", "uvicorn", "web:app", "--port", str(web_port)],
-        AGENT_DIR, env, tmp_path_factory.mktemp("webui") / "web.log",
-    )
+def test_backend_info_flows_and_agent_run(services, tmp_path_factory):
+    base, proc = _spawn_backend(services, tmp_path_factory, "info")
     try:
-        base = f"http://127.0.0.1:{web_port}"
-        wait_http(f"{base}/health")
+        token = _login(base, ADMIN_EMAIL, ADMIN_PASSWORD)
+        h = _auth(token)
 
-        # /api/info: four MCP servers, each carrying its own tools; mock LLM present.
-        info = httpx.get(f"{base}/api/info").json()
+        info = httpx.get(f"{base}/api/info", headers=h).json()
         assert len(info["servers"]) == 4
         all_tools = {t["name"] for s in info["servers"] for t in s["tools"]}
         assert {"list_vehicles", "activate_service", "vehicle_software", "list_datasets"} <= all_tools
+        assert info["tool_count"] == len(all_tools)
+        assert any(l["id"] == "mock" for l in info["llms"])
 
-        # /api/tool runs a single tool directly (used by the Deep Dive flows)
-        tr = httpx.post(f"{base}/api/tool",
+        tr = httpx.post(f"{base}/api/tool", headers=h,
                         json={"name": "list_vehicles", "arguments": {}}, timeout=30).json()
         assert tr["ok"] is True and "VR7CONNECT00001" in tr["result"]
-        bad = httpx.post(f"{base}/api/tool",
+        bad = httpx.post(f"{base}/api/tool", headers=h,
                          json={"name": "nope_tool", "arguments": {}}, timeout=30).json()
         assert bad["ok"] is False
 
         # configurable process flows (Deep Dive): defaults + CRUD
-        flows = httpx.get(f"{base}/api/flows").json()["flows"]
+        flows = httpx.get(f"{base}/api/flows", headers=h).json()["flows"]
         assert {f["id"] for f in flows} >= {"bootstrap", "pairing", "activation", "fota", "analytics"}
-        created = httpx.post(f"{base}/api/flows", json={
+        created = httpx.post(f"{base}/api/flows", headers=h, json={
             "name": "Quick Check", "description": "demo",
             "inputs": [{"key": "vehicle", "label": "Vehicle", "required": True}],
             "steps": [{"system": "CVC", "tool": "get_vehicle", "what": "state", "why": "x",
                        "args": {"vin": "{vin}"}, "capture": []}],
         }).json()
         assert created["id"] == "quick-check" and len(created["steps"]) == 1
-        assert any(f["id"] == "quick-check" for f in httpx.get(f"{base}/api/flows").json()["flows"])
-        assert httpx.request("DELETE", f"{base}/api/flows/quick-check").json()["removed"] == "quick-check"
-        # reset restores the defaults
-        assert len(httpx.post(f"{base}/api/flows/reset").json()["flows"]) == 5
-        assert info["tool_count"] == len(all_tools)
-        assert any(l["id"] == "mock" for l in info["llms"])
+        assert any(f["id"] == "quick-check" for f in httpx.get(f"{base}/api/flows", headers=h).json()["flows"])
+        assert httpx.request("DELETE", f"{base}/api/flows/quick-check", headers=h).json()["deleted"] == "quick-check"
+        assert len(httpx.post(f"{base}/api/flows/reset", headers=h).json()["flows"]) == 5
 
-        # headless run -> returns a recorded run with tool calls
-        rec = httpx.post(
-            f"{base}/api/headless/run",
-            json={"question": "list the connected vehicles", "provider": "mock"},
-            timeout=60,
-        ).json()
-        assert rec["error"] is False
-        assert rec["tool_calls"][0]["name"] == "list_vehicles"
-        assert httpx.get(f"{base}/api/headless/runs").json()["runs"]
-
-        # scheduled trigger: create -> appears in list -> delete
-        trig = httpx.post(
-            f"{base}/api/headless/triggers",
-            json={"question": "list vehicles", "interval_seconds": 5, "provider": "mock",
-                  "label": "watch"},
-        ).json()
-        tid = trig["id"]
-        listed = httpx.get(f"{base}/api/headless/triggers").json()["triggers"]
-        assert any(t["id"] == tid for t in listed)
-        assert httpx.request("DELETE", f"{base}/api/headless/triggers/{tid}").json()["stopped"] == tid
-        assert all(t["id"] != tid for t in httpx.get(f"{base}/api/headless/triggers").json()["triggers"])
+        # headless-via-API run -> recorded in run_history with tool calls + audit entry
+        rec = httpx.post(f"{base}/api/agents/run", headers=h,
+                         json={"question": "list the connected vehicles", "provider": "mock"}, timeout=60).json()
+        assert rec["error"] is False and rec["tool_calls"][0]["name"] == "list_vehicles"
+        assert any(r["id"] == rec["id"] for r in httpx.get(f"{base}/api/agents/runs", headers=h).json())
+        audit = httpx.get(f"{base}/api/audit", headers=h).json()
+        assert any(a["action"] == "agent.run" for a in audit)
     finally:
         proc.terminate()
         try:
@@ -432,47 +481,37 @@ def test_web_ui_endpoints(services, tmp_path_factory):
             proc.kill()
 
 
-def test_mcp_crud(services, tmp_path_factory):
+def test_backend_mcp_crud(services, tmp_path_factory):
     # Add a second copy of the CVC server at runtime, then remove it — proving the
-    # MCP CRUD wires a live server in and out of the agent's toolbox.
-    web_port = free_port()
-    env = {**os.environ, "MCP_SERVER_URLS": services["mcp_urls"], "LLM_PROVIDER": "mock"}
-    proc = _spawn(
-        [sys.executable, "-m", "uvicorn", "web:app", "--port", str(web_port)],
-        AGENT_DIR, env, tmp_path_factory.mktemp("mcpcrud") / "web.log",
-    )
+    # MCP CRUD wires a live server in and out of the agent's toolbox (admin only).
+    base, proc = _spawn_backend(services, tmp_path_factory, "mcpcrud")
     try:
-        base = f"http://127.0.0.1:{web_port}"
-        wait_http(f"{base}/health")
-        listed0 = httpx.get(f"{base}/api/mcp/servers").json()["servers"]
+        token = _login(base, ADMIN_EMAIL, ADMIN_PASSWORD)
+        h = _auth(token)
+
+        listed0 = httpx.get(f"{base}/api/mcp/servers", headers=h).json()["servers"]
         start = len(listed0)
-        # Default server ids must be path-safe (no '/') so DELETE/PUT routing works.
-        assert all("/" not in s["id"] for s in listed0)
+        assert all("/" not in s["id"] for s in listed0)  # path-safe ids (used in DELETE/PUT routes)
 
-        # a default (auto-id) server can be removed and re-added — exercises the
-        # exact slug-id delete path the UI uses.
         first = listed0[0]
-        assert httpx.request("DELETE", f"{base}/api/mcp/servers/{first['id']}").json()["removed"] == first["id"]
-        assert len(httpx.get(f"{base}/api/mcp/servers").json()["servers"]) == start - 1
-        httpx.post(f"{base}/api/mcp/servers", json={"url": first["url"]}, timeout=30)
-        assert len(httpx.get(f"{base}/api/mcp/servers").json()["servers"]) == start
+        assert httpx.request("DELETE", f"{base}/api/mcp/servers/{first['id']}", headers=h).json()["deleted"] == first["id"]
+        assert len(httpx.get(f"{base}/api/mcp/servers", headers=h).json()["servers"]) == start - 1
+        httpx.post(f"{base}/api/mcp/servers", headers=h, json={"url": first["url"]}, timeout=30)
+        assert len(httpx.get(f"{base}/api/mcp/servers", headers=h).json()["servers"]) == start
 
-        # add one of the existing MCP urls again under a custom id
         extra_url = services["mcp_urls"].split(",")[0]
-        added = httpx.post(f"{base}/api/mcp/servers",
+        added = httpx.post(f"{base}/api/mcp/servers", headers=h,
                            json={"url": extra_url, "id": "extra"}, timeout=30).json()
         assert added["status"] == "connected" and added["tool_count"] > 0
-        assert len(httpx.get(f"{base}/api/mcp/servers").json()["servers"]) == start + 1
+        assert len(httpx.get(f"{base}/api/mcp/servers", headers=h).json()["servers"]) == start + 1
 
-        # adding an unreachable server returns an error status (no crash)
-        bad = httpx.post(f"{base}/api/mcp/servers",
+        bad = httpx.post(f"{base}/api/mcp/servers", headers=h,
                          json={"url": "http://127.0.0.1:9/mcp", "id": "bad"}, timeout=30).json()
         assert bad["status"] == "error"
-        httpx.request("DELETE", f"{base}/api/mcp/servers/bad")
+        httpx.request("DELETE", f"{base}/api/mcp/servers/bad", headers=h)
 
-        # remove the extra one
-        assert httpx.request("DELETE", f"{base}/api/mcp/servers/extra").json()["removed"] == "extra"
-        assert len(httpx.get(f"{base}/api/mcp/servers").json()["servers"]) == start
+        assert httpx.request("DELETE", f"{base}/api/mcp/servers/extra", headers=h).json()["deleted"] == "extra"
+        assert len(httpx.get(f"{base}/api/mcp/servers", headers=h).json()["servers"]) == start
     finally:
         proc.terminate()
         try:
@@ -481,34 +520,61 @@ def test_mcp_crud(services, tmp_path_factory):
             proc.kill()
 
 
-def test_llm_crud(services, tmp_path_factory):
-    # Create an LLM config, use it, edit it, set default, delete it.
-    web_port = free_port()
-    env = {**os.environ, "MCP_SERVER_URLS": services["mcp_urls"], "LLM_PROVIDER": "mock"}
-    proc = _spawn(
-        [sys.executable, "-m", "uvicorn", "web:app", "--port", str(web_port)],
-        AGENT_DIR, env, tmp_path_factory.mktemp("llmcrud") / "web.log",
-    )
+def test_backend_llm_crud(services, tmp_path_factory):
+    base, proc = _spawn_backend(services, tmp_path_factory, "llmcrud")
     try:
-        base = f"http://127.0.0.1:{web_port}"
-        wait_http(f"{base}/health")
+        token = _login(base, ADMIN_EMAIL, ADMIN_PASSWORD)
+        h = _auth(token)
 
-        created = httpx.post(f"{base}/api/llms",
-                             json={"name": "Test Mock", "kind": "mock"}).json()
+        created = httpx.post(f"{base}/api/llms", headers=h, json={"name": "Test Mock", "kind": "mock"}).json()
         lid = created["id"]
-        assert any(l["id"] == lid for l in httpx.get(f"{base}/api/llms").json()["llms"])
+        assert any(l["id"] == lid for l in httpx.get(f"{base}/api/llms", headers=h).json()["llms"])
 
-        # the new LLM works as a provider id in a headless run
-        rec = httpx.post(f"{base}/api/headless/run",
+        rec = httpx.post(f"{base}/api/agents/run", headers=h,
                          json={"question": "list vehicles", "provider": lid}, timeout=60).json()
         assert rec["error"] is False and rec["tool_calls"]
 
-        # edit + set default + delete
-        edited = httpx.put(f"{base}/api/llms/{lid}", json={"name": "Renamed"}).json()
+        edited = httpx.put(f"{base}/api/llms/{lid}", headers=h, json={"name": "Renamed"}).json()
         assert edited["name"] == "Renamed"
-        assert httpx.put(f"{base}/api/llms/{lid}/default").json()["default"] == lid
-        assert httpx.request("DELETE", f"{base}/api/llms/{lid}").json()["removed"] == lid
-        assert all(l["id"] != lid for l in httpx.get(f"{base}/api/llms").json()["llms"])
+        assert httpx.put(f"{base}/api/llms/{lid}/default", headers=h).json()["default"] == lid
+        assert httpx.request("DELETE", f"{base}/api/llms/{lid}", headers=h).json()["deleted"] == lid
+        assert all(l["id"] != lid for l in httpx.get(f"{base}/api/llms", headers=h).json()["llms"])
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(5)
+        except Exception:  # noqa: BLE001
+            proc.kill()
+
+
+def test_backend_schedules_persist_and_fire(services, tmp_path_factory):
+    # Persistent scheduler: create -> appears in list -> fires at least once
+    # (interval=5s, polled up to 30s) -> writes to run_history -> pause/delete.
+    base, proc = _spawn_backend(services, tmp_path_factory, "schedules")
+    try:
+        token = _login(base, ADMIN_EMAIL, ADMIN_PASSWORD)
+        h = _auth(token)
+
+        created = httpx.post(f"{base}/api/schedules", headers=h, json={
+            "label": "watch", "question": "list vehicles", "provider": "mock", "interval_seconds": 5,
+        }).json()
+        sid = created["id"]
+        assert any(s["id"] == sid for s in httpx.get(f"{base}/api/schedules", headers=h).json())
+
+        deadline = time.time() + 30
+        runs = []
+        while time.time() < deadline:
+            runs = httpx.get(f"{base}/api/schedules/{sid}/runs", headers=h).json()
+            if runs:
+                break
+            time.sleep(1)
+        assert runs, "schedule never fired within 30s"
+        assert runs[0]["source"] == "schedule" and runs[0]["error"] is False
+
+        paused = httpx.post(f"{base}/api/schedules/{sid}/pause", headers=h).json()
+        assert paused["active"] is False
+        assert httpx.request("DELETE", f"{base}/api/schedules/{sid}", headers=h).json()["deleted"] == sid
+        assert all(s["id"] != sid for s in httpx.get(f"{base}/api/schedules", headers=h).json())
     finally:
         proc.terminate()
         try:

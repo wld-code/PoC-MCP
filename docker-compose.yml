@@ -4,13 +4,17 @@
 #                      (car gateway) + redbend-api (OTA / activation executor)
 #                      + datalake-api (massive connected-services analytics)
 #   4 MCP servers .... asap-mcp + cvc-mcp + redbend-mcp + datalake-mcp
-#   2 agents ......... agent (headless/CLI, on demand) + agent-web (UI)
+#   backend .......... FastAPI API — auth (JWT/RBAC), chat, headless-via-API,
+#                      persistent APScheduler automations, all state in Postgres
+#   frontend ......... React SPA (built + served by nginx), talks to backend
+#                      over REST — decoupled from it (separate origin/port)
+#   agent ............ headless/REPL CLI, on demand — no DB, no server needed
 #
-# The agents connect to ALL FOUR MCP servers and see one merged toolbox.
-# ASAP orchestrates by calling Redbend, which executes the OTA/activation.
+# The backend (and the CLI `agent`) connect to ALL FOUR MCP servers and see
+# one merged toolbox. ASAP orchestrates by calling Redbend, which executes.
 #
 #   cp .env.example .env && docker compose up -d --build
-#   open http://localhost:8002
+#   open http://localhost:3000                      # the web app (frontend)
 #   docker compose run --rm agent python headless.py "Is Walid's car online?"
 services:
   # ---- Fake backend APIs ---------------------------------------------------
@@ -100,8 +104,76 @@ services:
       datalake-api:
         condition: service_healthy
 
-  # ---- Agents --------------------------------------------------------------
-  # HEADLESS / interactive agent — does NOT auto-start. Run on demand:
+  # ---- Database --------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aiops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiops}
+      POSTGRES_DB: ${POSTGRES_DB:-aiops}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aiops}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---- Backend API (auth, RBAC, chat, headless-via-API, scheduler) ---------
+  backend:
+    build: ./agent
+    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      RUN_MIGRATIONS: "1"      # entrypoint.sh runs `alembic upgrade head` first
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-aiops}:${POSTGRES_PASSWORD:-aiops}@postgres:5432/${POSTGRES_DB:-aiops}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set a random JWT_SECRET_KEY in .env}
+      FERNET_KEY: ${FERNET_KEY:?set a Fernet key in .env — see .env.example}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      # This stack terminates no TLS itself (plain HTTP on localhost) — the
+      # refresh cookie's Secure flag must stay false here or browsers refuse
+      # to store it. Set COOKIE_SECURE=true once a real deployment puts this
+      # behind HTTPS (a reverse proxy/ingress).
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-now}   # fine for a quick spin; change it for anything real
+      MCP_SERVER_URLS: http://asap-mcp:8011/mcp,http://cvc-mcp:8012/mcp,http://redbend-mcp:8013/mcp,http://datalake-mcp:8014/mcp
+      LLM_PROVIDER: ${LLM_PROVIDER:-claude}
+      LLM_MODEL: ${LLM_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+    ports:
+      - "${WEB_PORT:-8002}:8002"   # host port overridable via .env (WEB_PORT)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      asap-mcp:
+        condition: service_started
+      cvc-mcp:
+        condition: service_started
+      redbend-mcp:
+        condition: service_started
+      datalake-mcp:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  # ---- Frontend (React SPA, built + served by nginx) -----------------------
+  frontend:
+    build: ./frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ---- Headless / interactive CLI agent — does NOT auto-start, no DB -------
   #   docker compose run --rm agent python headless.py "Is Walid's car online?"
   #   docker compose run --rm agent python agent.py        # interactive REPL
   agent:
@@ -123,22 +195,5 @@ services:
     stdin_open: true
     tty: true
 
-  # UI agent — web chat. Starts with `up`; open http://localhost:8002
-  agent-web:
-    build: ./agent
-    command: ["uvicorn", "web:app", "--host", "0.0.0.0", "--port", "8002"]
-    environment:
-      MCP_SERVER_URLS: http://asap-mcp:8011/mcp,http://cvc-mcp:8012/mcp,http://redbend-mcp:8013/mcp,http://datalake-mcp:8014/mcp
-      LLM_PROVIDER: ${LLM_PROVIDER:-claude}
-      LLM_MODEL: ${LLM_MODEL:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
-    ports:
-      - "${WEB_PORT:-8002}:8002"   # host port overridable via .env (WEB_PORT)
-    depends_on:
-      - asap-mcp
-      - cvc-mcp
-      - redbend-mcp
-      - datalake-mcp
+volumes:
+  pgdata:

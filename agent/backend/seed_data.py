@@ -1,0 +1,102 @@
+"""Seed data — the 5 built-in Deep Dive flows, ported verbatim from the
+former `web.py::_default_flows()` (same ids/steps/args, just `id` -> `slug`
+to match the DB column name)."""
+from __future__ import annotations
+
+_VEHICLE_INPUT = {"key": "vehicle", "label": "Vehicle (VIN or owner)",
+                   "placeholder": "Walid or VR7CONNECT00001", "default": "", "required": True}
+
+BUILTIN_FLOWS = [
+    {
+        "slug": "bootstrap", "name": "Bootstrap",
+        "description": "How a connected vehicle comes online and gets its base services provisioned: confirm it is known, reachable, see provisioned services, and check the embedded software stack.",
+        "inputs": [_VEHICLE_INPUT],
+        "steps": [
+            {"system": "CVC", "tool": "list_vehicles", "what": "Resolve the vehicle and confirm it exists",
+             "why": "Every flow starts from a VIN; the gateway is the registry of connected vehicles.",
+             "args": {}, "capture": ["vin"]},
+            {"system": "CVC", "tool": "get_vehicle", "what": "Check the car is online and reachable",
+             "why": "Bootstrap needs live connectivity — energy, signal, software version, online status.",
+             "args": {"vin": "{vin}"}, "capture": []},
+            {"system": "ASAP", "tool": "service_states", "what": "See which services are provisioned",
+             "why": "Bootstrap provisions the base services; desired vs actual shows what is really applied.",
+             "args": {"vin": "{vin}"}, "capture": []},
+            {"system": "Redbend", "tool": "vehicle_software", "what": "Inspect the embedded software stack",
+             "why": "The car must run a current firmware/software stack; we also see available OTA updates.",
+             "args": {"vin": "{vin}"}, "capture": []},
+        ],
+    },
+    {
+        "slug": "pairing", "name": "Pairing",
+        "description": "How an activation request is paired to the vehicle — and how to diagnose a pairing that did not take: find a service requested but not actually active (drift), then open the OTA campaign that should have applied it.",
+        "inputs": [{**_VEHICLE_INPUT, "placeholder": "Camille (has a Wi-Fi drift)"}],
+        "steps": [
+            {"system": "CVC", "tool": "list_vehicles", "what": "Resolve the vehicle",
+             "why": "We need the VIN to inspect its service pairing.", "args": {}, "capture": ["vin"]},
+            {"system": "ASAP", "tool": "service_states", "what": "Find desired vs actual — spot the drift",
+             "why": "A pairing failure shows as desired ACTIVE but actual INACTIVE (in_sync=false).",
+             "args": {"vin": "{vin}"}, "capture": ["campaign"]},
+            {"system": "Redbend", "tool": "get_campaign", "what": "Open the OTA campaign that should have paired it",
+             "why": "The campaign trace shows exactly where pairing failed (e.g. download interrupted).",
+             "args": {"campaign_id": "{campaign}"}, "capture": [],
+             "skip_note": "No drift found — every requested service is actually active, so there is nothing to diagnose."},
+        ],
+    },
+    {
+        "slug": "activation", "name": "Service Activation",
+        "description": "How a service is activated end to end: ASAP sets the desired state and dispatches an OTA campaign to Redbend; the actual state flips only once the campaign reaches the car.",
+        "inputs": [_VEHICLE_INPUT, {"key": "service", "label": "Service code", "placeholder": "REMOTE_CLIMATE",
+                                     "default": "REMOTE_CLIMATE", "required": True}],
+        "steps": [
+            {"system": "CVC", "tool": "list_vehicles", "what": "Resolve the vehicle",
+             "why": "Activation acts on a VIN.", "args": {}, "capture": ["vin"]},
+            {"system": "CVC", "tool": "get_vehicle", "what": "Confirm the car is online before acting",
+             "why": "You should not push a command to a car that is not connected.",
+             "args": {"vin": "{vin}"}, "capture": []},
+            {"system": "ASAP", "tool": "activate_service", "what": "Set desired ACTIVE and dispatch to Redbend",
+             "why": "ASAP is the control plane: it records the desired state and orchestrates the OTA campaign.",
+             "args": {"vin": "{vin}", "service_code": "{service}"}, "capture": ["campaign"]},
+            {"system": "Redbend", "tool": "get_campaign", "what": "See the OTA campaign that applied it",
+             "why": "Redbend is the data plane — it actually delivered the activation to the vehicle.",
+             "args": {"campaign_id": "{campaign}"}, "capture": []},
+            {"system": "ASAP", "tool": "service_states", "what": "Confirm actual now matches desired",
+             "why": "After a successful campaign the service is in sync (desired = actual = ACTIVE).",
+             "args": {"vin": "{vin}"}, "capture": []},
+        ],
+    },
+    {
+        "slug": "fota", "name": "FOTA / SOTA",
+        "description": "How an over-the-air update is delivered: read the installed stack and available packages, launch the campaign, then verify the install bumped the module version.",
+        "inputs": [_VEHICLE_INPUT, {"key": "package", "label": "Package", "placeholder": "FW_TCU_2025_06",
+                                     "default": "FW_TCU_2025_06", "required": True}],
+        "steps": [
+            {"system": "CVC", "tool": "list_vehicles", "what": "Resolve the vehicle",
+             "why": "Updates target a VIN.", "args": {}, "capture": ["vin"]},
+            {"system": "Redbend", "tool": "vehicle_software", "what": "Read installed versions + available updates",
+             "why": "You install against the current stack and only what is actually available.",
+             "args": {"vin": "{vin}"}, "capture": []},
+            {"system": "Redbend", "tool": "create_campaign", "what": "Launch the FOTA campaign",
+             "why": "Redbend downloads, verifies, installs and activates the package on the car.",
+             "args": {"vin": "{vin}", "type": "FOTA", "target": "{package}"}, "capture": ["campaign"]},
+            {"system": "Redbend", "tool": "vehicle_software", "what": "Verify the module version was bumped",
+             "why": "A successful FOTA shows up as a new version on the targeted module.",
+             "args": {"vin": "{vin}"}, "capture": []},
+        ],
+    },
+    {
+        "slug": "analytics", "name": "Fleet Analytics",
+        "description": "How the big picture is built from the data lake: fleet-wide usage, the most-used applications, and the anomalies that tie back to per-vehicle issues. Fleet-wide — no VIN.",
+        "inputs": [],
+        "steps": [
+            {"system": "Data Lake", "tool": "service_usage", "what": "Fleet-wide usage summary",
+             "why": "Scale of data, monthly active vehicles, total sessions and data volume.",
+             "args": {"period": "30d"}, "capture": []},
+            {"system": "Data Lake", "tool": "top_applications", "what": "Most-used applications + growth",
+             "why": "Which connected services drive usage and which are growing or declining.",
+             "args": {"limit": "5"}, "capture": []},
+            {"system": "Data Lake", "tool": "anomalies", "what": "Flagged anomalies across the fleet",
+             "why": "Macro signals that often trace back to a per-vehicle drift (e.g. Wi-Fi activations).",
+             "args": {}, "capture": []},
+        ],
+    },
+]

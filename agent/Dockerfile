@@ -6,10 +6,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+RUN chmod +x entrypoint.sh
 
-# Default to the in-cluster / in-compose MCP service URL.
-ENV MCP_SERVER_URL=http://mcp-server:8001/mcp
-ENV LLM_PROVIDER=claude
+ENV LLM_PROVIDER=mock
 
-# Interactive by default; override the command to ask a one-shot question.
+ENTRYPOINT ["./entrypoint.sh"]
+
+# Interactive REPL by default (the `agent` CLI service); docker-compose
+# overrides the command for the `backend` API service (uvicorn) and for
+# one-shot headless runs (`python headless.py "..."`).
 CMD ["python", "agent.py"]
