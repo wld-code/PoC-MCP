@@ -102,7 +102,7 @@ export default function DeepDive() {
 
       <div className="grid grid-3">
         {flows.map((f) => (
-          <div key={f.id} className={`card`} style={{ cursor: "pointer", borderColor: selected?.id === f.id ? "var(--blue)" : undefined }} onClick={() => pick(f)}>
+          <div key={f.id} className={`card clickable ${selected?.id === f.id ? "selected" : ""}`} onClick={() => pick(f)}>
             <h3>{f.name}</h3>
             <div style={{ fontSize: 12, color: "var(--slate)" }}>{f.description}</div>
           </div>

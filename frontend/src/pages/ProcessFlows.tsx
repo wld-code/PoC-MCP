@@ -322,7 +322,7 @@ export default function ProcessFlows() {
           <button className="btn secondary sm" style={{ marginTop: 4 }} onClick={addStep}>+ Add step</button>
 
           {unresolved.length > 0 && (
-            <div className="msg error" style={{ marginTop: 14 }}>
+            <div className="msg warn" style={{ marginTop: 14 }}>
               ⚠️ These placeholders are never defined by an input or an earlier step's capture: {unresolved.map((p) => `{${p}}`).join(", ")}.
               The step will be skipped at run time until it's provided.
             </div>
