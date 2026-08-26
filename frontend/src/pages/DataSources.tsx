@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { useLatestGuard } from "../api/useLatestGuard";
 
 interface McpServer { id: string; name: string; url: string; status: string; error: string | null; tool_count: number }
 
@@ -9,7 +10,8 @@ export default function DataSources() {
   const [id, setId] = useState("");
   const [msg, setMsg] = useState("");
 
-  async function refresh() { setServers((await api.get("/api/mcp/servers")).servers); }
+  const guard = useLatestGuard();
+  async function refresh() { await guard(() => api.get("/api/mcp/servers"), (d) => setServers(d.servers)); }
   useEffect(() => { refresh(); }, []);
 
   async function add(e: React.FormEvent) {

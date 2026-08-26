@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { useLatestGuard } from "../api/useLatestGuard";
 import { useAuth, Role } from "../auth/AuthContext";
 
 interface UserOut { id: number; email: string; role: Role; is_active: boolean; created_at: string }
@@ -12,7 +13,8 @@ export default function Users() {
   const [role, setRole] = useState<Role>("viewer");
   const [msg, setMsg] = useState("");
 
-  async function refresh() { setUsers(await api.get("/api/users")); }
+  const guard = useLatestGuard();
+  async function refresh() { await guard(() => api.get("/api/users"), setUsers); }
   useEffect(() => { refresh(); }, []);
 
   async function create(e: React.FormEvent) {

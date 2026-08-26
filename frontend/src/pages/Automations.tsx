@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { useLatestGuard } from "../api/useLatestGuard";
 import { useAuth } from "../auth/AuthContext";
 
 interface Schedule {
@@ -20,8 +21,11 @@ export default function Automations() {
   const [cron, setCron] = useState("0 * * * *");
   const [msg, setMsg] = useState("");
 
+  const guard = useLatestGuard();
+  async function refreshSchedules() { await guard(() => api.get("/api/schedules"), setSchedules); }
+
   useEffect(() => {
-    api.get("/api/schedules").then(setSchedules).catch(() => {});
+    refreshSchedules();
     api.get("/api/llms").then((d) => { setLlms(d.llms); setProvider(d.default || d.llms[0]?.id || ""); }).catch(() => {});
   }, []);
 
@@ -35,7 +39,7 @@ export default function Automations() {
         interval_seconds: mode === "interval" ? interval : null,
       });
       setLabel(""); setQuestion("");
-      setSchedules(await api.get("/api/schedules"));
+      await refreshSchedules();
       setMsg("Scheduled.");
     } catch (err: any) {
       setMsg(err.message);
@@ -44,11 +48,11 @@ export default function Automations() {
 
   async function toggle(s: Schedule) {
     await api.post(`/api/schedules/${s.id}/${s.active ? "pause" : "resume"}`);
-    setSchedules(await api.get("/api/schedules"));
+    await refreshSchedules();
   }
   async function remove(id: number) {
     await api.del(`/api/schedules/${id}`);
-    setSchedules(await api.get("/api/schedules"));
+    await refreshSchedules();
   }
 
   return (

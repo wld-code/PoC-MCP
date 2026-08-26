@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { useLatestGuard } from "../api/useLatestGuard";
 import { useAuth } from "../auth/AuthContext";
 
 interface LlmOut { id: string; name: string; kind: string; model: string; base_url: string; has_key: boolean; is_default: boolean; needs_key: boolean }
@@ -15,9 +16,9 @@ export default function AiModels() {
   const [apiKey, setApiKey] = useState("");
   const [msg, setMsg] = useState("");
 
+  const guard = useLatestGuard();
   async function refresh() {
-    const d = await api.get("/api/llms");
-    setLlms(d.llms); setKinds(d.kinds);
+    await guard(() => api.get("/api/llms"), (d) => { setLlms(d.llms); setKinds(d.kinds); });
   }
   useEffect(() => { refresh(); }, []);
 

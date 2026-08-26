@@ -381,6 +381,7 @@ cd frontend && npm install && npm run dev   # UI → http://localhost:5173
 | Doc | Contents |
 | --- | --- |
 | [`docs/06-agentic-ai-tutorial.md`](docs/06-agentic-ai-tutorial.md) | **Start here** — what an agent is, the agentic loop, the four-system scenario (CVC/ASAP/Redbend/Data Lake), desired vs actual state, a full run, how to extend |
+| [`docs/07-dashboard-diagrams.md`](docs/07-dashboard-diagrams.md) | The functional schema, the technical architecture schema, and a sequence diagram for each of the 10 dashboard operations (auth, chat, automations, deep dive, insights, data sources, AI models, process flows, audit trail, users) |
 | [`docs/01-mcp-tutorial.md`](docs/01-mcp-tutorial.md) | MCP concepts, tool design, transports, LLM bridging |
 | [`docs/05-agent-architecture.md`](docs/05-agent-architecture.md) | Agents in general: the loop, how to build one |
 | [`docs/04-agents-and-tests.md`](docs/04-agents-and-tests.md) | The agents, the `mock` provider, the e2e tests |

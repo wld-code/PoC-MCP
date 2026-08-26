@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { useLatestGuard } from "../api/useLatestGuard";
 import { useAuth } from "../auth/AuthContext";
 
 interface Flow { id: string; name: string; description: string; is_builtin: boolean; steps: any[] }
@@ -9,7 +10,8 @@ export default function ProcessFlows() {
   const [flows, setFlows] = useState<Flow[]>([]);
   const [msg, setMsg] = useState("");
 
-  async function refresh() { setFlows((await api.get("/api/flows")).flows); }
+  const guard = useLatestGuard();
+  async function refresh() { await guard(() => api.get("/api/flows"), (d) => setFlows(d.flows)); }
   useEffect(() => { refresh(); }, []);
 
   async function remove(id: string) { await api.del(`/api/flows/${id}`); await refresh(); }
