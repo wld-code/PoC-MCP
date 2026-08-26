@@ -1,4 +1,4 @@
-"""AI Operations Control — backend API.
+"""AI Control Tower — backend API.
 
 Supersedes `web.py`: this process serves **only** the JSON API (no embedded
 HTML/JS — the SPA is a separate `frontend/` project, see docker-compose.yml).
@@ -123,7 +123,7 @@ async def lifespan(app: FastAPI):
         await manager.aclose()
 
 
-app = FastAPI(title="AI Operations Control — API", lifespan=lifespan)
+app = FastAPI(title="AI Control Tower — API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

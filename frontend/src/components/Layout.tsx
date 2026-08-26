@@ -19,7 +19,7 @@ export default function Layout() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          AI OPERATIONS CONTROL
+          AI CONTROL TOWER
           <small>Connected Fleet · MCP Agent</small>
         </div>
         <nav>

@@ -28,7 +28,7 @@ export default function Login() {
   return (
     <div className="login-page">
       <form className="login-box" onSubmit={submit}>
-        <h1>AI Operations Control</h1>
+        <h1>AI Control Tower</h1>
         <p className="subtitle">Sign in to continue</p>
         {error && <div className="msg error">{error}</div>}
         <label>Email</label>

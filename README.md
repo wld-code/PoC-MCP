@@ -219,7 +219,7 @@ job itself — not just its description — is persisted. Manage them from the
 **Automations** page or `POST/GET/DELETE /api/schedules`,
 `POST /api/schedules/{id}/pause|resume`.
 
-### The web app — "AI Operations Control"
+### The web app — "AI Control Tower"
 
 A sidebar SPA (no internal MCP terminology surfaced to the user):
 
