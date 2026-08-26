@@ -106,3 +106,33 @@ th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size
 
 .chat-answer { white-space: pre-wrap; line-height: 1.5; font-size: 14px; }
 .empty { color: var(--muted); font-size: 13px; padding: 20px 0; text-align: center; }
+
+/* ---- Process Flows editor -------------------------------------------- */
+.flow-glance { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0; font-size: 12px; color: var(--slate); }
+.flow-glance .seg { display: flex; align-items: center; gap: 6px; }
+.flow-glance .arrow { color: var(--muted); }
+.flow-glance .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+
+.input-row, .arg-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.input-row input, .arg-row input { flex: 1; min-width: 0; }
+.checkbox-inline { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--slate); white-space: nowrap; margin: 0; }
+.checkbox-inline input { width: auto; }
+
+.hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+.flow-timeline { position: relative; margin-top: 8px; }
+.flow-step { position: relative; padding-left: 36px; padding-bottom: 20px; }
+.flow-step:last-child { padding-bottom: 0; }
+.flow-step::before {
+  content: ""; position: absolute; left: 11px; top: 26px; bottom: -2px; width: 2px; background: var(--ice);
+}
+.flow-step:last-child::before { display: none; }
+.flow-step .badge {
+  position: absolute; left: 0; top: 2px; width: 24px; height: 24px; border-radius: 50%;
+  color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+}
+.flow-step .step-card { border: 1px solid var(--ice); border-left-width: 4px; border-radius: 8px; padding: 14px 16px; }
+.step-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.flow-step-row { display: flex; gap: 10px; align-items: flex-start; }
+.flow-step-row > * { flex: 1; min-width: 0; }
+.step-actions { display: flex; gap: 6px; padding-top: 20px; flex-shrink: 0; }
